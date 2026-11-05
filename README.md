@@ -19,80 +19,128 @@ A local, read-only MCP server and web chat application for KnowBe4 Reporting API
 
 ## Requirements
 
-- Windows 10/11, macOS, or Linux
-- Python 3.10+
-- A KnowBe4 subscription with Reporting API access and one Reporting API key per console
-- [Ollama](https://ollama.com) with a tool-calling model pulled (default `qwen3.5:4b`)
+- Windows 10 or 11. The commands below are for Windows PowerShell; the Python parts also run on macOS and Linux.
+- Python 3.12 (tested). `pyproject.toml` allows 3.10 and later.
+- [Ollama](https://ollama.com) and about 4 GB of free disk for the default model.
+- An NVIDIA GPU is strongly recommended. Tested on an RTX 3060 Laptop GPU with 6 GB of VRAM: `qwen3.5:4b` with a 32k context runs entirely on the GPU. Without a GPU, Ollama falls back to the CPU and answers are much slower.
+- A KnowBe4 subscription with Reporting API access and one **Reporting API** key per console (User Event API keys do not work here).
 
-KnowBe4 currently documents the Reporting API base URLs for US, EU, CA, UK and DE. Authentication uses `Authorization: Bearer <token>`. Pagination uses `per_page` (maximum 500) and `cursor`; the older `page` parameter is being deprecated. All API timestamps are UTC.
+KnowBe4 currently documents the Reporting API base URLs for US, EU, CA, UK and DE. Authentication uses `Authorization: Bearer <token>`. Pagination uses `per_page` (maximum 500) and `cursor`; the older `page` parameter is deprecated from November 2026. All API timestamps are UTC.
 
-## 1. Create the project
+## 1. Get the code
 
-Extract the ZIP into a normal folder, for example:
-
-```powershell
-C:\Projects\knowbe4-reporting-mcp
-```
-
-Open that folder in VS Code.
-
-## 2. Create a Python virtual environment
-
-PowerShell:
+With Git:
 
 ```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python --version
+git clone https://github.com/ZGreatEvil/kb4-reporting-mcp.git C:\Projects\kb4-reporting-mcp
+cd C:\Projects\kb4-reporting-mcp
 ```
 
-If PowerShell blocks activation, you can run the interpreter directly without activating:
+Without Git: on the GitHub page choose **Code → Download ZIP** and extract it to `C:\Projects\kb4-reporting-mcp`.
+
+Keep the folder out of any web server's document root (for example `C:\xampp\htdocs`): the `.env` file you create later holds the API keys.
+
+## 2. Install Python and the dependencies
+
+Check for Python 3.12:
 
 ```powershell
-.\.venv\Scripts\python.exe --version
+py -3.12 --version
 ```
 
-## 3. Install dependencies
+If that fails, install it (or use the installer from [python.org](https://www.python.org/downloads/windows/)), then open a new terminal:
 
 ```powershell
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+winget install --id Python.Python.3.12 --exact
 ```
 
-The project uses the current stable MCP v2 line (`mcp>=2,<3`). Do not create a top-level folder named `mcp`, because that would shadow the installed MCP SDK package. The chat agent uses the `openai` package (`openai>=3.46,<4`) only as a client for the local OpenAI-compatible server; nothing is sent to OpenAI.
-
-## 4. Configure the local model
-
-Install Ollama, then pull the model:
+Create the virtual environment and install the project:
 
 ```powershell
-ollama pull qwen3.5:4b
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-Copy:
+This guide always calls `.\.venv\Scripts\python.exe` directly, so you never need to activate the venv (PowerShell blocks `Activate.ps1` by default). `pip install -r requirements.txt` also works if you do not need the tests.
 
-```text
-.env.example -> .env
+The project uses the stable MCP v2 line (`mcp>=2,<3`). Do not create a top-level folder named `mcp`: it would shadow the installed MCP SDK. The chat agent uses the `openai` package (`openai>=3.46,<4`) only as a client for the local Ollama server; nothing is sent to OpenAI.
+
+## 3. Install Ollama and the model
+
+1. Install Ollama with the installer from [ollama.com/download/windows](https://ollama.com/download/windows) (`OllamaSetup.exe`), or in PowerShell:
+
+   ```powershell
+   irm https://ollama.com/install.ps1 | iex
+   ```
+
+2. Download the model (about 3.3 GB):
+
+   ```powershell
+   ollama pull qwen3.5:4b
+   ```
+
+   If the progress stops for minutes, press `Ctrl+C` and run the same command again: it resumes where it stopped. A VPN can make downloads stall repeatedly; `%LOCALAPPDATA%\Ollama\server.log` shows `stalled; retrying` when that happens.
+
+3. Give the model enough context and save GPU memory. These are user environment variables; `setx` only affects programs started afterwards:
+
+   ```powershell
+   setx OLLAMA_CONTEXT_LENGTH 32768
+   setx OLLAMA_FLASH_ATTENTION 1
+   setx OLLAMA_KV_CACHE_TYPE q8_0
+   ```
+
+   Then quit Ollama from its tray icon (right-click → Quit) and start it again from the Start menu.
+
+   `q8_0` stores the context cache at about half the memory of the default; it applies to every Ollama model on the machine.
+
+4. Check that it works and fits on the GPU:
+
+   ```powershell
+   ollama run qwen3.5:4b --think=false "Reply with just the word OK."
+   ollama ps
+   ```
+
+   `ollama ps` should show `100% GPU` under `PROCESSOR` and `32768` under `CONTEXT`. If it shows a CPU share (for example `29%/71% CPU/GPU`), the model plus context does not fit: set a smaller `OLLAMA_CONTEXT_LENGTH` (`24576`, then `16384`), restart Ollama and check again. With more GPU memory, try a larger value; Ollama recommends at least 64k for agents.
+
+   Measured on the 6 GB test laptop:
+
+   | `OLLAMA_CONTEXT_LENGTH` | Memory | `PROCESSOR` |
+   | --- | --- | --- |
+   | 65536 | 5.3 GB | 29%/71% CPU/GPU |
+   | 40960 | 4.6 GB | 17%/83% CPU/GPU |
+   | 32768 | 3.7 GB | 100% GPU |
+   | 24576 | 3.5 GB | 100% GPU |
+
+## 4. Configure the chat model
+
+Create your settings file:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
 ```
 
-The `LLM_*` defaults point at Ollama on `http://localhost:11434/v1`:
+The `LLM_*` defaults already point at Ollama on this machine:
 
-```env
-LLM_BASE_URL=http://localhost:11434/v1
-LLM_API_KEY=ollama
-LLM_MODEL=qwen3.5:4b
-```
-
-To use another model or server, change these values; no code change is needed. Leave `LLM_TEMPERATURE` and `LLM_TOP_P` empty to use the model's own defaults, and leave `LLM_REASONING_EFFORT` empty to keep thinking on (small models skip tool calls without it).
-
-Ollama's default context window is small. Set `OLLAMA_CONTEXT_LENGTH` (a user environment variable on Windows; quit and restart Ollama afterwards) to the largest value that still shows `100% GPU` in `ollama ps`.
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `LLM_BASE_URL` | `http://localhost:11434/v1` | Any OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM) |
+| `LLM_MODEL` | `qwen3.5:4b` | Model name on that server; change it to try another model, no code change needed |
+| `LLM_TEMPERATURE`, `LLM_TOP_P` | empty | Empty uses the model's own defaults (Ollama ships Qwen's recommended values) |
+| `LLM_REASONING_EFFORT` | empty | Empty keeps thinking on. `none` is faster but in testing answered 6 of 8 questions correctly instead of 16 of 16, once without looking at the data |
+| `LLM_MAX_TOKENS` | `8192` | Cap on one reply, including thinking |
+| `LLM_MAX_TOOL_LOOPS` | `8` | Tool-call rounds per question |
+| `LLM_MAX_TOOL_CHARS` | `12000` | Longer tool results are cut down before the model sees them |
+| `LLM_TIMEOUT_SECONDS` | `180` | Per model call |
+| `LLM_EXPOSE_RAW_GET` | `false` | Hides the open-ended `knowbe4_raw_get` tool from the chat model |
+| `KB4_RATE_LIMIT_RPS` | `0.8` | KnowBe4 requests per second (about 48 a minute) |
 
 ## 5. Configure KnowBe4 consoles
 
-Copy:
-
-```text
-config/consoles.example.yaml -> config/consoles.yaml
+```powershell
+Copy-Item config\consoles.example.yaml config\consoles.yaml
+notepad config\consoles.yaml
 ```
 
 Example:
@@ -121,14 +169,14 @@ KB4_SUBSIDIARY_API_KEY=...
 
 A console whose key is missing, empty or a placeholder such as `xxxx` is listed as unavailable, and the chat tells the user it is not configured.
 
-Do not commit `.env` or `config/consoles.yaml` to Git.
+Do not commit `.env` or `config/consoles.yaml` to Git (both are in `.gitignore`).
 
 ## 6. Test the KnowBe4 API keys
 
-From the project root:
+From the project folder:
 
 ```powershell
-python test_knowbe4.py
+.\.venv\Scripts\python.exe test_knowbe4.py
 ```
 
 Expected output is similar to:
@@ -138,12 +186,14 @@ Expected output is similar to:
 {'console': 'subsidiary', 'status': 'skipped', 'reason': 'KB4_SUBSIDIARY_API_KEY not set'}
 ```
 
-If you get `401`, the token is wrong, expired/revoked, or belongs to a different API type. Reporting API keys are separate from User Event API keys.
+If you get `401`, the token is wrong, expired or revoked, or belongs to a different API type. Reporting API keys are separate from User Event API keys.
 
 ## 7. Start the MCP server
 
+In a first terminal:
+
 ```powershell
-python run_mcp.py
+.\.venv\Scripts\python.exe run_mcp.py
 ```
 
 Default MCP endpoint:
@@ -160,12 +210,13 @@ For a local-only deployment the default server binds to `127.0.0.1`. If you late
 
 ## 8. Start the web chat
 
-Make sure Ollama is running (`ollama ps` answers), then open another terminal:
+Make sure Ollama is running (`ollama ps` answers), then in a second terminal:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-python run_web.py
+.\.venv\Scripts\python.exe run_web.py
 ```
+
+Check `http://127.0.0.1:8080/health`: it should show `"status": "ok"` with `"reachable": true` and `"model_pulled": true` under `llm`. `"degraded"` means Ollama is not running or the model is not pulled.
 
 Open:
 
@@ -191,7 +242,7 @@ Find the 10 active users with the highest current risk score in main.
 Compare July 2026 training completion between main and subsidiary.
 ```
 
-The chat agent reaches KnowBe4 only through the MCP server's tools, the same ones any MCP-compatible host can use. `knowbe4_raw_get` is hidden from the chat model unless `LLM_EXPOSE_RAW_GET=true`. Local models are slower than cloud ones: an answer that needs several tool calls can take a minute or more, and `/health` shows whether the model server is reachable and the model is pulled.
+The chat agent reaches KnowBe4 only through the MCP server's tools, the same ones any MCP-compatible host can use. `knowbe4_raw_get` is hidden from the chat model unless `LLM_EXPOSE_RAW_GET=true`. Local models are slower than cloud ones. On the 6 GB test laptop, answers took 6–37 seconds (about 17 on average) across eight typical questions; the page shows a running timer and gives up after 180 seconds.
 
 ## 9. Connect an MCP client (optional)
 
@@ -272,8 +323,8 @@ If the error is `No module named 'mcp.server'`, make sure the dependency is inst
 Run:
 
 ```powershell
-python -m pip install -r requirements.txt
-python -c "import mcp; print(\"MCP SDK:\", getattr(mcp, \"__version__\", \"installed\"), mcp.__file__)"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -c "import mcp; print(mcp.__file__)"
 ```
 
 ### `Missing API key for console`
@@ -313,18 +364,29 @@ Then restart the relevant process.
 
 ## 14. Development
 
-Run tests:
+Run the tests (no Ollama, KnowBe4 or network needed; the agent, pagination and summary tests use fakes):
 
 ```powershell
-pip install -e ".[dev]"
-pytest
+.\.venv\Scripts\python.exe -m pytest
 ```
 
 Basic syntax check:
 
 ```powershell
-python -m compileall .
+.\.venv\Scripts\python.exe -m compileall -q agent config kb4_mcp knowbe4 web tests
 ```
+
+Layout:
+
+| Path | Purpose |
+| --- | --- |
+| `knowbe4/client.py` | Read-only KnowBe4 Reporting API client: auth, rate limit, retries, cursor pagination |
+| `kb4_mcp/server_impl.py` | MCP server and tool list |
+| `kb4_mcp/summaries.py` | Summary tools (sorting and arithmetic in Python) |
+| `agent/llm.py` | OpenAI-compatible client for the local model, with readable errors |
+| `agent/agent.py` | Tool loop: MCP session, console checks, truncation, system prompt |
+| `web/` | FastAPI app and the chat page |
+| `config/settings.py` | `.env` and `consoles.yaml` loading |
 
 ## 15. Important implementation note about 2026 pagination
 
