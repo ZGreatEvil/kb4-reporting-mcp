@@ -63,10 +63,25 @@ class ConsoleConfig(BaseModel):
         return value
 
 
+def _optional_float(name: str) -> float | None:
+    # unset means "use the model's own default" (ollama ships qwen's recommended sampling)
+    value = os.getenv(name, "").strip()
+    return float(value) if value else None
+
+
 class AppConfig(BaseModel):
     consoles: Dict[str, ConsoleConfig]
-    gemini_api_key: str = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
-    gemini_model: str = Field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.6-flash"))
+    llm_base_url: str = Field(default_factory=lambda: os.getenv("LLM_BASE_URL", "http://localhost:11434/v1"))
+    llm_api_key: str = Field(default_factory=lambda: os.getenv("LLM_API_KEY", "ollama"))
+    llm_model: str = Field(default_factory=lambda: os.getenv("LLM_MODEL", "qwen3.5:4b"))
+    llm_temperature: float | None = Field(default_factory=lambda: _optional_float("LLM_TEMPERATURE"))
+    llm_top_p: float | None = Field(default_factory=lambda: _optional_float("LLM_TOP_P"))
+    llm_reasoning_effort: str = Field(default_factory=lambda: os.getenv("LLM_REASONING_EFFORT", "").strip())
+    llm_max_tokens: int = Field(default_factory=lambda: int(os.getenv("LLM_MAX_TOKENS", "8192")))
+    llm_max_tool_loops: int = Field(default_factory=lambda: int(os.getenv("LLM_MAX_TOOL_LOOPS", "8")))
+    llm_max_tool_chars: int = Field(default_factory=lambda: int(os.getenv("LLM_MAX_TOOL_CHARS", "12000")))
+    llm_timeout_seconds: float = Field(default_factory=lambda: float(os.getenv("LLM_TIMEOUT_SECONDS", "180")))
+    llm_expose_raw_get: bool = Field(default_factory=lambda: os.getenv("LLM_EXPOSE_RAW_GET", "false").lower() == "true")
     web_host: str = Field(default_factory=lambda: os.getenv("WEB_HOST", "127.0.0.1"))
     web_port: int = Field(default_factory=lambda: int(os.getenv("WEB_PORT", "8080")))
     mcp_host: str = Field(default_factory=lambda: os.getenv("MCP_HOST", "127.0.0.1"))

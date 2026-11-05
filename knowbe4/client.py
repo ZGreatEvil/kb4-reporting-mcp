@@ -56,7 +56,7 @@ class KnowBe4Client:
                 headers={
                     "Authorization": f"Bearer {cc.api_key}",
                     "Accept": "application/json",
-                    "User-Agent": "knowbe4-gemini-mcp/1.0",
+                    "User-Agent": "knowbe4-reporting-mcp/1.1",
                 },
                 follow_redirects=True,
             )

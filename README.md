@@ -1,6 +1,6 @@
-# KnowBe4 Gemini MCP — Multi-Console Reporting (No Docker)
+# KnowBe4 Reporting MCP — Multi-Console Reporting (No Docker)
 
-A local, read-only MCP server and web chat application for KnowBe4 Reporting API, using Gemini API as the LLM.
+A local, read-only MCP server and web chat application for KnowBe4 Reporting API, using a free open-weight model running locally (Ollama by default), so KnowBe4 data never leaves the machine.
 
 ## What is included
 
@@ -12,7 +12,7 @@ A local, read-only MCP server and web chat application for KnowBe4 Reporting API
 - Pagination with `per_page` up to 500 + cursor-based iteration and a configurable record ceiling
 - Rate limiting and retry/backoff for transient network failures
 - MCP Streamable HTTP server on localhost
-- Gemini API chat agent using the same read-only reporting functions
+- Local LLM chat agent (any OpenAI-compatible server: Ollama, LM Studio, llama.cpp, vLLM) using the same read-only tools over MCP
 - Simple local web chat UI
 - Health-check script
 - No Docker required
@@ -22,7 +22,7 @@ A local, read-only MCP server and web chat application for KnowBe4 Reporting API
 - Windows 10/11, macOS, or Linux
 - Python 3.10+
 - A KnowBe4 subscription with Reporting API access and one Reporting API key per console
-- A Gemini API key
+- [Ollama](https://ollama.com) with a tool-calling model pulled (default `qwen3.5:4b`)
 
 KnowBe4 currently documents the Reporting API base URLs for US, EU, CA, UK and DE. Authentication uses `Authorization: Bearer <token>`. Pagination uses `per_page` (maximum 500) and `cursor`; the older `page` parameter is being deprecated. All API timestamps are UTC.
 
@@ -31,7 +31,7 @@ KnowBe4 currently documents the Reporting API base URLs for US, EU, CA, UK and D
 Extract the ZIP into a normal folder, for example:
 
 ```powershell
-C:\Projects\knowbe4-gemini-mcp
+C:\Projects\knowbe4-reporting-mcp
 ```
 
 Open that folder in VS Code.
@@ -59,9 +59,15 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-The project uses the current stable MCP v2 line (`mcp>=2,<3`). Do not create a top-level folder named `mcp`, because that would shadow the installed MCP SDK package. and the Google GenAI SDK (`google-genai>=2.3.0`) because Gemini's current Interactions API documentation requires that SDK line for Interactions API features.
+The project uses the current stable MCP v2 line (`mcp>=2,<3`). Do not create a top-level folder named `mcp`, because that would shadow the installed MCP SDK package. The chat agent uses the `openai` package (`openai>=3.46,<4`) only as a client for the local OpenAI-compatible server; nothing is sent to OpenAI.
 
-## 4. Configure Gemini
+## 4. Configure the local model
+
+Install Ollama, then pull the model:
+
+```powershell
+ollama pull qwen3.5:4b
+```
 
 Copy:
 
@@ -69,14 +75,17 @@ Copy:
 .env.example -> .env
 ```
 
-Then set:
+The `LLM_*` defaults point at Ollama on `http://localhost:11434/v1`:
 
 ```env
-GEMINI_API_KEY=YOUR_GEMINI_API_KEY
-GEMINI_MODEL=gemini-3.6-flash
+LLM_BASE_URL=http://localhost:11434/v1
+LLM_API_KEY=ollama
+LLM_MODEL=qwen3.5:4b
 ```
 
-The SDK reads `GEMINI_API_KEY` from the environment.
+To use another model or server, change these values; no code change is needed. Leave `LLM_TEMPERATURE` and `LLM_TOP_P` empty to use the model's own defaults, and leave `LLM_REASONING_EFFORT` empty to keep thinking on (small models skip tool calls without it).
+
+Ollama's default context window is small. Set `OLLAMA_CONTEXT_LENGTH` (a user environment variable on Windows; quit and restart Ollama afterwards) to the largest value that still shows `100% GPU` in `ollama ps`.
 
 ## 5. Configure KnowBe4 consoles
 
@@ -149,9 +158,9 @@ This server is **read-only**. No POST/PUT/PATCH/DELETE KnowBe4 operation is expo
 
 For a local-only deployment the default server binds to `127.0.0.1`. If you later expose it beyond localhost, add a proper MCP authentication layer before doing so. The `.env` file includes `MCP_BEARER_TOKEN` as a reserved setting for that next step; the sample server deliberately does not claim that value is enforced automatically by the MCP SDK.
 
-## 8. Start the Gemini web chat
+## 8. Start the web chat
 
-Open another terminal:
+Make sure Ollama is running (`ollama ps` answers), then open another terminal:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
@@ -182,7 +191,7 @@ Find the 10 active users with the highest current risk score in main.
 Compare July 2026 training completion between main and subsidiary.
 ```
 
-The Gemini agent calls the reporting functions directly. The MCP server exposes the same functions to an MCP-compatible host.
+The chat agent reaches KnowBe4 only through the MCP server's tools, the same ones any MCP-compatible host can use. `knowbe4_raw_get` is hidden from the chat model unless `LLM_EXPOSE_RAW_GET=true`. Local models are slower than cloud ones: an answer that needs several tool calls can take a minute or more, and `/health` shows whether the model server is reachable and the model is pulled.
 
 ## 9. Connect an MCP client (optional)
 
@@ -220,7 +229,8 @@ The model should not be given an entire organization dataset unless that is trul
 
 ## 12. Security notes
 
-- API keys remain server-side and are never sent to Gemini as credentials.
+- API keys remain server-side and are never sent to the model. With the default local model, KnowBe4 data never leaves the machine.
+- Logs show tool names and argument keys only, never argument values or the user's question.
 - Never log the `Authorization` header.
 - Keep `.env` private.
 - Use HTTPS if the MCP endpoint is ever exposed outside localhost.
@@ -268,15 +278,11 @@ KB4_RATE_LIMIT_RPS=4
 
 The client also retries transient network errors with exponential backoff. If the API returns 429, your environment may need a more conservative request rate.
 
-### `gemini` errors
+### Local model errors
 
-Check:
-
-```powershell
-python -c "from google import genai; print('google-genai OK')"
-```
-
-and confirm `GEMINI_API_KEY` is present.
+- "Tidak bisa terhubung ke server LLM": Ollama is not running. Start it from the Start menu, then check `ollama ps`.
+- "Model ... belum tersedia": run `ollama pull <LLM_MODEL>`.
+- Very slow answers: run `ollama ps`. If `PROCESSOR` shows a CPU share, the model plus context does not fit in GPU memory; lower `OLLAMA_CONTEXT_LENGTH` or use a smaller model.
 
 ### Port already in use
 
@@ -313,6 +319,6 @@ If KnowBe4 changes the cursor contract for a specific endpoint, update `KnowBe4C
 ## Official references
 
 - KnowBe4 Reporting API: https://developer.knowbe4.com/rest/reporting
-- Google Gemini function calling: https://ai.google.dev/gemini-api/docs/function-calling
-- Google Gemini Interactions API: https://ai.google.dev/gemini-api/docs/interactions-overview
+- Ollama OpenAI compatibility: https://docs.ollama.com/api/openai-compatibility
+- Ollama context length: https://docs.ollama.com/context-length
 - MCP Python SDK: https://py.sdk.modelcontextprotocol.io/

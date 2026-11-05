@@ -54,7 +54,7 @@ def test_missing_key_raises(monkeypatch):
 
 
 def test_prompt_lists_consoles_from_config(monkeypatch):
-    from gemini.agent import build_system_prompt
+    from agent.agent import build_system_prompt
 
     monkeypatch.setenv("KB4_A_KEY", "real-token")
     monkeypatch.delenv("KB4_B_KEY", raising=False)
@@ -70,7 +70,7 @@ def test_prompt_lists_consoles_from_config(monkeypatch):
 
 
 def test_prompt_with_no_keys(monkeypatch):
-    from gemini.agent import build_system_prompt
+    from agent.agent import build_system_prompt
 
     monkeypatch.delenv("KB4_B_KEY", raising=False)
     cfg = AppConfig(consoles={"b": ConsoleConfig(display_name="Beta", api_key_env="KB4_B_KEY")})

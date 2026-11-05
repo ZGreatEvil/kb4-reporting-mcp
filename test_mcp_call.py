@@ -4,8 +4,13 @@ import json
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from config.settings import load_config
 
-MCP_URL = "http://127.0.0.1:8000/mcp"
+
+CONFIG = load_config()
+MCP_URL = f"http://{CONFIG.mcp_host}:{CONFIG.mcp_port}{CONFIG.mcp_path}"
+# first console that has an api key
+CONSOLE = next((k for k, c in CONFIG.consoles.items() if c.has_api_key), None)
 
 
 async def main():
@@ -35,10 +40,14 @@ async def main():
                     f"- {tool.name}"
                 )
 
+            if CONSOLE is None:
+                print("\nNo console has an API key; skipping get_account.")
+                return
+
             result = await session.call_tool(
             "get_account",
             arguments={
-                "console": "sis"
+                "console": CONSOLE
                     },
                 )
 

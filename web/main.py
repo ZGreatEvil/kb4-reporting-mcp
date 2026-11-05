@@ -6,8 +6,9 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from agent.agent import Agent
+from agent.llm import LLMError
 from config.settings import load_config
-from gemini.agent import GeminiAgent
 
 
 # =========================================================
@@ -15,7 +16,7 @@ from gemini.agent import GeminiAgent
 # =========================================================
 
 app = FastAPI(
-    title="KnowBe4 Gemini AI Analyst",
+    title="KnowBe4 AI Analyst",
     version="1.0.0",
 )
 
@@ -26,7 +27,7 @@ app = FastAPI(
 
 CONFIG = load_config()
 
-AGENT = GeminiAgent(CONFIG)
+AGENT = Agent(CONFIG)
 
 
 # =========================================================
@@ -74,11 +75,25 @@ async def index():
 @app.get("/health")
 async def health():
 
+    try:
+        models = await AGENT.llm.list_models()
+        llm = {
+            "reachable": True,
+            "model_pulled": CONFIG.llm_model in models,
+        }
+    except Exception as exc:
+        llm = {
+            "reachable": False,
+            "error_type": type(exc).__name__,
+        }
+
     return {
-        "status": "ok",
-        "service": "knowbe4-gemini-web",
+        "status": "ok" if llm.get("model_pulled") else "degraded",
+        "service": "knowbe4-ai-web",
         "mcp_url": AGENT.mcp_url,
-        "gemini_model": CONFIG.gemini_model,
+        "llm_base_url": CONFIG.llm_base_url,
+        "llm_model": CONFIG.llm_model,
+        "llm": llm,
         "consoles": list(
             CONFIG.consoles.keys()
         ),
@@ -195,6 +210,18 @@ async def chat(
             "answer": answer,
         }
 
+    except LLMError as exc:
+
+        print(
+            f"[CHAT LLM ERROR] {exc}",
+            flush=True,
+        )
+
+        return {
+            "answer": str(exc),
+            "error_type": "LLMError",
+        }
+
     except BaseExceptionGroup as exc:
 
         print(
@@ -230,7 +257,7 @@ async def chat(
         return {
             "answer": (
                 "Terjadi error pada "
-                "Gemini → MCP → KnowBe4."
+                "LLM → MCP → KnowBe4."
             ),
             "error_type": (
                 type(exc).__name__

@@ -3,27 +3,23 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>KnowBe4 Gemini AI Analyst</title>
-
-  <!-- Google Fonts: Inter & SF Pro Display style -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <title>KnowBe4 AI Analyst</title>
 
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Marked.js for Markdown rendering -->
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Marked.js for Markdown rendering, DOMPurify to sanitise model output -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@18.1.1/lib/marked.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.17/dist/purify.min.js"></script>
   <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@1.61.0/dist/umd/lucide.min.js"></script>
 
   <script>
     tailwind.config = {
       theme: {
         extend: {
           fontFamily: {
-            sans: ['"Plus Jakarta Sans"', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
-            mono: ['"JetBrains Mono"', 'monospace'],
+            sans: ['"Segoe UI Variable"', '"Segoe UI"', '-apple-system', 'BlinkMacSystemFont', 'Roboto', 'sans-serif'],
+            mono: ['"Cascadia Mono"', 'Consolas', 'ui-monospace', 'monospace'],
           },
           colors: {
             apple: {
@@ -70,7 +66,7 @@
     .prose-ai li { margin-bottom: 0.25rem; }
     .prose-ai strong { font-weight: 600; color: #0f172a; }
     .prose-ai h1, .prose-ai h2, .prose-ai h3 { font-weight: 700; margin-top: 1rem; margin-bottom: 0.5rem; color: #0f172a; }
-    .prose-ai code { font-family: 'JetBrains Mono', monospace; background: rgba(0,0,0,0.06); padding: 0.15rem 0.4rem; border-radius: 6px; font-size: 0.85em; }
+    .prose-ai code { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; background: rgba(0,0,0,0.06); padding: 0.15rem 0.4rem; border-radius: 6px; font-size: 0.85em; }
     .prose-ai pre { background: #0f172a; color: #f8fafc; padding: 1rem; border-radius: 12px; overflow-x: auto; margin: 0.75rem 0; }
     .prose-ai pre code { background: transparent; color: inherit; padding: 0; }
     .prose-ai table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; font-size: 0.875rem; }
@@ -191,6 +187,12 @@
       })
       .catch(() => {});
 
+    // local models are slow; the agent may need several tool rounds
+    const CHAT_TIMEOUT_MS = 180000;
+
+    // model output is untrusted html once rendered
+    const renderMarkdown = (text) => DOMPurify.sanitize(marked.parse(text));
+
     const chat = document.querySelector('#chat');
     const form = document.querySelector('#form');
     const input = document.querySelector('#message');
@@ -232,7 +234,7 @@
       } else {
         bubble.className = "bg-white/85 backdrop-blur-md border border-white/90 p-4 rounded-2xl rounded-tl-sm text-slate-700 text-sm leading-relaxed shadow-bubble-ai prose-ai w-full overflow-hidden";
         if (isMarkdown) {
-          bubble.innerHTML = marked.parse(content);
+          bubble.innerHTML = renderMarkdown(content);
         } else {
           bubble.textContent = content;
         }
@@ -268,22 +270,41 @@
       input.style.height = '42px';
       send.disabled = true;
 
-      // Loading bubble
-      const loadBubble = add('Menganalisis data KnowBe4...', 'ai', false);
+      // loading bubble with elapsed time, since local answers can take a while
+      const loadBubble = add('Menganalisis data KnowBe4… (0 dtk)', 'ai', false);
+      loadBubble.setAttribute('aria-live', 'polite');
+      const started = Date.now();
+      const ticker = setInterval(() => {
+        const secs = Math.round((Date.now() - started) / 1000);
+        loadBubble.textContent = `Menganalisis data KnowBe4… (${secs} dtk)`;
+      }, 1000);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
 
       try {
         const r = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: m })
+          body: JSON.stringify({ message: m }),
+          signal: controller.signal
         });
 
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
         const answer = data.answer || 'Tidak ada respons yang diterima.';
-        loadBubble.innerHTML = marked.parse(answer);
+        clearInterval(ticker);
+        loadBubble.innerHTML = renderMarkdown(answer);
       } catch (err) {
-        loadBubble.innerHTML = `<span class="text-rose-500 font-medium">⚠️ Error: ${err.message}</span>`;
+        clearInterval(ticker);
+        const text = err.name === 'AbortError'
+          ? `Tidak ada jawaban dalam ${CHAT_TIMEOUT_MS / 1000} detik. Coba pertanyaan yang lebih sempit.`
+          : `Error: ${err.message}`;
+        const span = document.createElement('span');
+        span.className = 'text-rose-500 font-medium';
+        span.textContent = '⚠️ ' + text;
+        loadBubble.replaceChildren(span);
       } finally {
+        clearTimeout(timeout);
         send.disabled = false;
         input.focus();
         chat.scrollTop = chat.scrollHeight;
