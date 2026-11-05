@@ -8,6 +8,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from agent.llm import LLMClient
+from agent.messages import DEFAULT_LANGUAGE, LANGUAGE_NAMES, msg
 from config.settings import AppConfig, load_config
 
 
@@ -33,17 +34,19 @@ Rules:
 7. current_risk_score (the overall risk score, higher is riskier) and phish_prone_percentage
    (the share of people who failed phishing tests) are different metrics. Never call the risk score a phishing rate.
 8. Never reveal API keys, tokens, Authorization headers, environment variables, or credentials.
-9. Answer in Indonesian unless the user asks for another language.
+9. Answer in {answer_language} unless the user explicitly asks for another language.
 10. The tools are read-only. Refuse requests to create, change or delete anything in KnowBe4.
 11. If a tool result says "truncated", say the data was cut and ask the user to narrow the question (a console, status, group, campaign or date range).
 12. Copy names, numbers and dates exactly as they appear in tool results. Do not translate, round or re-spell them.
+13. Report what the tools return. Do not add scales, benchmarks, ratings or interpretations
+    (for example "low risk" or "0-100") that are not in the tool results, unless the user asks for them.
 """.strip()
 
 # exposed to mcp clients, but too open-ended for a small local model
 HIDDEN_TOOLS = {"knowbe4_raw_get"}
 
 
-def build_system_prompt(config: AppConfig) -> str:
+def build_system_prompt(config: AppConfig, language: str = DEFAULT_LANGUAGE) -> str:
     lines = []
     available = []
     for key, console in config.consoles.items():
@@ -62,6 +65,7 @@ def build_system_prompt(config: AppConfig) -> str:
         console_lines="\n".join(lines) or "- (none)",
         available_ids=", ".join(f'"{k}"' for k in available) or "(none)",
         default_rule=default_rule,
+        answer_language=LANGUAGE_NAMES.get(language, LANGUAGE_NAMES[DEFAULT_LANGUAGE]),
     )
 
 
@@ -80,7 +84,6 @@ class Agent:
         self.config = config or load_config()
         self.llm = llm or LLMClient(self.config)
         self.mcp_url = f"http://{self.config.mcp_host}:{self.config.mcp_port}{self.config.mcp_path}"
-        self.system_prompt = build_system_prompt(self.config)
         self._session_factory = session_factory or self._mcp_session
 
     @asynccontextmanager
@@ -196,12 +199,12 @@ class Agent:
 
         return self._truncate(self._mcp_result_text(result))
 
-    async def ask(self, prompt: str) -> str:
+    async def ask(self, prompt: str, language: str = DEFAULT_LANGUAGE) -> str:
         prompt = prompt.strip()
         if not prompt:
-            return "Masukkan pertanyaan."
+            return msg("empty_question", language)
 
-        print(f"[AGENT] User question received ({len(prompt)} chars)", flush=True)
+        print(f"[AGENT] User question received ({len(prompt)} chars, language={language})", flush=True)
         max_loops = self.config.llm_max_tool_loops
 
         async with self._session_factory() as session:
@@ -210,7 +213,7 @@ class Agent:
             tool_names = {t["function"]["name"] for t in tools}
 
             messages: list[dict[str, Any]] = [
-                {"role": "system", "content": self.system_prompt},
+                {"role": "system", "content": build_system_prompt(self.config, language)},
                 {"role": "user", "content": prompt},
             ]
 
@@ -227,15 +230,12 @@ class Agent:
                     if not answer and not nudged and choice.finish_reason != "length":
                         nudged = True
                         print("[AGENT] Empty answer, asking for the final answer", flush=True)
-                        messages.append({
-                            "role": "user",
-                            "content": "Tuliskan jawaban akhir untuk pengguna sekarang, berdasarkan hasil tool di atas.",
-                        })
+                        messages.append({"role": "user", "content": msg("nudge", language)})
                         continue
                     if choice.finish_reason == "length":
-                        answer += "\n\n_(Jawaban terpotong karena batas LLM_MAX_TOKENS.)_"
+                        answer += "\n\n" + msg("cut_off", language)
                     print("[AGENT] Final answer generated", flush=True)
-                    return answer.strip() or "Model tidak memberikan jawaban."
+                    return answer.strip() or msg("no_answer", language)
 
                 # history keeps the final output only, not the thinking text (qwen guidance)
                 messages.append({
@@ -254,7 +254,4 @@ class Agent:
                     content = await self._run_tool(session, call, tool_names)
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
 
-        return (
-            f"Batas maksimum {max_loops} putaran tool call tercapai tanpa jawaban akhir. "
-            "Coba persempit pertanyaan."
-        )
+        return msg("loop_limit", language, loops=max_loops)

@@ -86,21 +86,22 @@
   <div class="relative w-full max-w-5xl h-[94vh] flex flex-col rounded-3xl bg-white/70 backdrop-blur-2xl border border-white/80 shadow-apple-glass overflow-hidden transition-all">
 
     <!-- Top macOS Style Header & Traffic Lights -->
-    <header class="flex items-center justify-between px-6 py-4 border-b border-white/60 bg-white/30 backdrop-blur-md">
+    <!-- wraps onto two rows on narrow screens instead of squeezing the badge -->
+    <header class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 sm:px-6 py-4 border-b border-white/60 bg-white/30 backdrop-blur-md">
       <div class="flex items-center gap-3.5">
-        <!-- Traffic light buttons -->
-        <div class="flex items-center gap-2">
+        <!-- Traffic light buttons (decorative, hidden on phones) -->
+        <div class="hidden sm:flex items-center gap-2" aria-hidden="true">
           <span class="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E]/40 inline-block shadow-sm"></span>
           <span class="w-3 h-3 rounded-full bg-[#FFBD2E] border border-[#DEA123]/40 inline-block shadow-sm"></span>
           <span class="w-3 h-3 rounded-full bg-[#27C93F] border border-[#1AAB29]/40 inline-block shadow-sm"></span>
         </div>
-        <div class="h-4 w-[1px] bg-slate-300/60 mx-1"></div>
+        <div class="hidden sm:block h-4 w-[1px] bg-slate-300/60 mx-1" aria-hidden="true"></div>
         <div class="flex items-center gap-2.5">
           <div class="p-1.5 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white shadow-md shadow-blue-500/20">
             <i data-lucide="shield-alert" class="w-4 h-4"></i>
           </div>
           <div>
-            <h1 class="text-sm font-bold text-slate-800 tracking-tight flex items-center gap-2">
+            <h1 class="text-sm font-bold text-slate-800 tracking-tight flex items-center gap-2 whitespace-nowrap">
               KnowBe4 AI Analyst
               <span class="text-[10px] uppercase font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 tracking-wider">Online</span>
             </h1>
@@ -109,8 +110,13 @@
       </div>
 
       <div class="flex items-center gap-2">
-        <span class="text-xs font-medium text-slate-500 bg-slate-200/50 backdrop-blur-sm px-2.5 py-1 rounded-full border border-white/50 shadow-sm flex items-center gap-1.5">
-          <i data-lucide="database" class="w-3 h-3 text-slate-600"></i>
+        <!-- language switch; the chosen language also goes to the model with each question -->
+        <div id="lang-switch" role="group" aria-label="Bahasa / Language" class="flex items-center rounded-full bg-slate-200/50 border border-white/50 shadow-sm p-0.5 text-xs font-semibold">
+          <button type="button" data-lang="id" aria-pressed="false" class="lang-btn min-h-[32px] min-w-[36px] px-2.5 rounded-full text-slate-500 hover:text-slate-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">ID</button>
+          <button type="button" data-lang="en" aria-pressed="false" class="lang-btn min-h-[32px] min-w-[36px] px-2.5 rounded-full text-slate-500 hover:text-slate-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">EN</button>
+        </div>
+        <span id="consoles-badge" class="text-xs font-medium text-slate-500 bg-slate-200/50 backdrop-blur-sm px-2.5 py-1 rounded-full border border-white/50 shadow-sm flex items-center gap-1.5 whitespace-nowrap" title="Configured consoles">
+          <i data-lucide="database" class="w-3 h-3 text-slate-600 shrink-0" aria-hidden="true"></i>
           <span id="consoles">KnowBe4</span>
         </span>
       </div>
@@ -118,14 +124,22 @@
 
     <!-- Chat Messages Stream Area -->
     <main id="chat" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-5 scroll-smooth">
+      <!-- first-visit language picker; hidden once a language is chosen -->
+      <section id="lang-picker" class="hidden mx-auto mt-6 w-full max-w-sm bg-white/85 backdrop-blur-md border border-white/90 rounded-2xl shadow-bubble-ai p-5 text-center" aria-labelledby="lang-picker-title">
+        <h2 id="lang-picker-title" class="text-sm font-semibold text-slate-800">Pilih bahasa · Choose language</h2>
+        <p class="text-xs text-slate-500 mt-1">Bisa diganti kapan saja lewat ID | EN · You can switch any time with ID | EN</p>
+        <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button type="button" data-lang="id" class="pick-btn min-h-[42px] px-3 rounded-xl bg-white border border-slate-200 text-sm font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700 active:scale-95 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">Bahasa Indonesia</button>
+          <button type="button" data-lang="en" class="pick-btn min-h-[42px] px-3 rounded-xl bg-white border border-slate-200 text-sm font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700 active:scale-95 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">English</button>
+        </div>
+      </section>
+
       <!-- Welcome Message from AI -->
-      <div class="flex items-start gap-3.5 max-w-[85%]">
+      <div id="welcome" class="hidden flex items-start gap-3.5 max-w-[85%]">
         <div class="w-8 h-8 rounded-2xl bg-gradient-to-tr from-blue-600 to-sky-400 flex items-center justify-center text-white shadow-md flex-shrink-0 mt-0.5">
           <i data-lucide="bot" class="w-4 h-4"></i>
         </div>
-        <div class="bg-white/80 backdrop-blur-md border border-white/90 p-4 rounded-2xl rounded-tl-sm text-slate-700 text-sm leading-relaxed shadow-bubble-ai prose-ai">
-          Ready. Ask me about risk scores, phishing campaigns, users, groups, training campaigns, enrollments, policies, or comparisons across consoles.
-        </div>
+        <div id="welcome-text" class="bg-white/80 backdrop-blur-md border border-white/90 p-4 rounded-2xl rounded-tl-sm text-slate-700 text-sm leading-relaxed shadow-bubble-ai prose-ai"></div>
       </div>
     </main>
 
@@ -153,16 +167,18 @@
         <textarea 
           id="message" 
           rows="1" 
-          placeholder="Ask a KnowBe4 reporting question..." 
+          placeholder="Ask about KnowBe4 reports…"
+          aria-label="Your question"
           class="w-full bg-transparent border-0 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-0 px-3.5 py-2.5 resize-none max-h-32 min-h-[42px]"
         ></textarea>
         
         <button 
           id="send" 
           type="submit" 
-          class="flex items-center justify-center gap-1.5 bg-[#0071E3] hover:bg-[#0077ED] active:scale-95 text-white font-medium text-xs px-4 py-2.5 rounded-xl shadow-md shadow-blue-500/25 transition-all duration-200 disabled:opacity-40 disabled:pointer-events-none flex-shrink-0"
+          aria-label="Send message"
+          class="min-h-[42px] flex items-center justify-center gap-1.5 bg-[#0071E3] hover:bg-[#0077ED] active:scale-95 text-white font-medium text-xs px-4 py-2.5 rounded-xl shadow-md shadow-blue-500/25 transition-all duration-200 disabled:opacity-40 disabled:pointer-events-none flex-shrink-0"
         >
-          <span>Send</span>
+          <span id="send-label">Send</span>
           <i data-lucide="arrow-up" class="w-3.5 h-3.5"></i>
         </button>
       </form>
@@ -197,6 +213,92 @@
     const form = document.querySelector('#form');
     const input = document.querySelector('#message');
     const send = document.querySelector('#send');
+
+    // every piece of page text, per language; server messages come back already translated
+    const STRINGS = {
+      id: {
+        welcome: 'Siap. Tanyakan tentang risk score, kampanye phishing, user, grup, training, enrollment, policy, atau perbandingan antar konsol.',
+        placeholder: 'Tanya laporan KnowBe4…',
+        inputLabel: 'Pertanyaan Anda',
+        send: 'Kirim',
+        sendLabel: 'Kirim pertanyaan',
+        consoles: 'Konsol yang dikonfigurasi',
+        loading: (s) => `Menganalisis data KnowBe4… (${s} dtk)`,
+        noAnswer: 'Tidak ada respons yang diterima.',
+        timeout: (s) => `Tidak ada jawaban dalam ${s} detik. Coba pertanyaan yang lebih sempit.`,
+        error: (m) => `Error: ${m}`,
+      },
+      en: {
+        welcome: 'Ready. Ask about risk scores, phishing campaigns, users, groups, training, enrolments, policies or comparisons across consoles.',
+        placeholder: 'Ask about KnowBe4 reports…',
+        inputLabel: 'Your question',
+        send: 'Send',
+        sendLabel: 'Send question',
+        consoles: 'Configured consoles',
+        loading: (s) => `Analysing KnowBe4 data… (${s} s)`,
+        noAnswer: 'No response received.',
+        timeout: (s) => `No answer within ${s} seconds. Try a narrower question.`,
+        error: (m) => `Error: ${m}`,
+      },
+    };
+    const LANG_KEY = 'kb4-chat-language';
+    const picker = document.querySelector('#lang-picker');
+    const welcome = document.querySelector('#welcome');
+    let lang = null;
+    let busy = false;
+
+    // storage can be blocked (private windows, strict settings); the picker then just shows again
+    function savedLang() {
+      try {
+        const v = localStorage.getItem(LANG_KEY);
+        return v === 'id' || v === 'en' ? v : null;
+      } catch { return null; }
+    }
+
+    function applyLang(l) {
+      lang = l;
+      try { localStorage.setItem(LANG_KEY, l); } catch {}
+      const t = STRINGS[l];
+      document.documentElement.lang = l;
+      document.querySelector('#welcome-text').textContent = t.welcome;
+      input.placeholder = t.placeholder;
+      input.setAttribute('aria-label', t.inputLabel);
+      document.querySelector('#send-label').textContent = t.send;
+      send.setAttribute('aria-label', t.sendLabel);
+      document.querySelector('#consoles-badge').title = t.consoles;
+      document.querySelectorAll('.lang-btn').forEach((b) => {
+        const on = b.dataset.lang === l;
+        b.setAttribute('aria-pressed', String(on));
+        b.classList.toggle('bg-white', on);
+        b.classList.toggle('text-blue-700', on);
+        b.classList.toggle('shadow-sm', on);
+        b.classList.toggle('text-slate-500', !on);
+      });
+      picker.classList.add('hidden');
+      welcome.classList.remove('hidden');
+      input.disabled = false;
+      send.disabled = busy;
+    }
+
+    document.querySelectorAll('.lang-btn, .pick-btn').forEach((b) => {
+      b.addEventListener('click', () => {
+        const fromPicker = b.classList.contains('pick-btn');
+        applyLang(b.dataset.lang);
+        if (fromPicker) input.focus();
+      });
+    });
+
+    const initial = savedLang();
+    if (initial) {
+      applyLang(initial);
+    } else {
+      picker.classList.remove('hidden');
+      // neutral until a language is picked
+      input.placeholder = 'Pilih bahasa · Choose language';
+      input.disabled = true;
+      send.disabled = true;
+      document.querySelector('#send-label').textContent = '…';
+    }
 
     // Auto-expand textarea
     input.addEventListener('input', function () {
@@ -263,20 +365,24 @@
     form.onsubmit = async (e) => {
       e.preventDefault();
       const m = input.value.trim();
-      if (!m) return;
+      if (!m || !lang) return;
 
+      // a switch while waiting only affects the next question
+      const t = STRINGS[lang];
+      const requestLang = lang;
       add(m, 'user');
       input.value = '';
       input.style.height = '42px';
+      busy = true;
       send.disabled = true;
 
       // loading bubble with elapsed time, since local answers can take a while
-      const loadBubble = add('Menganalisis data KnowBe4… (0 dtk)', 'ai', false);
+      const loadBubble = add(t.loading(0), 'ai', false);
       loadBubble.setAttribute('aria-live', 'polite');
       const started = Date.now();
       const ticker = setInterval(() => {
         const secs = Math.round((Date.now() - started) / 1000);
-        loadBubble.textContent = `Menganalisis data KnowBe4… (${secs} dtk)`;
+        loadBubble.textContent = t.loading(secs);
       }, 1000);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
@@ -285,26 +391,27 @@
         const r = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: m }),
+          body: JSON.stringify({ message: m, language: requestLang }),
           signal: controller.signal
         });
 
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
-        const answer = data.answer || 'Tidak ada respons yang diterima.';
+        const answer = data.answer || t.noAnswer;
         clearInterval(ticker);
         loadBubble.innerHTML = renderMarkdown(answer);
       } catch (err) {
         clearInterval(ticker);
         const text = err.name === 'AbortError'
-          ? `Tidak ada jawaban dalam ${CHAT_TIMEOUT_MS / 1000} detik. Coba pertanyaan yang lebih sempit.`
-          : `Error: ${err.message}`;
+          ? t.timeout(CHAT_TIMEOUT_MS / 1000)
+          : t.error(err.message);
         const span = document.createElement('span');
         span.className = 'text-rose-500 font-medium';
         span.textContent = '⚠️ ' + text;
         loadBubble.replaceChildren(span);
       } finally {
         clearTimeout(timeout);
+        busy = false;
         send.disabled = false;
         input.focus();
         chat.scrollTop = chat.scrollHeight;

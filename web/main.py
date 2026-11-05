@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from agent.agent import Agent
 from agent.llm import LLMError
+from agent.messages import DEFAULT_LANGUAGE, Language, msg
 from config.settings import load_config
 
 
@@ -51,6 +52,8 @@ HTML = HTML_PATH.read_text(
 
 class ChatRequest(BaseModel):
     message: str
+    # anything other than "id" or "en" is rejected with 422
+    language: Language = DEFAULT_LANGUAGE
 
 
 # =========================================================
@@ -192,18 +195,20 @@ async def chat(
 ):
 
     message = req.message.strip()
+    language = req.language
 
     if not message:
 
         return {
             "answer":
-            "Masukkan pertanyaan terlebih dahulu."
+            msg("empty_question", language)
         }
 
     try:
 
         answer = await AGENT.ask(
-            message
+            message,
+            language,
         )
 
         return {
@@ -213,12 +218,12 @@ async def chat(
     except LLMError as exc:
 
         print(
-            f"[CHAT LLM ERROR] {exc}",
+            f"[CHAT LLM ERROR] {exc.key}",
             flush=True,
         )
 
         return {
-            "answer": str(exc),
+            "answer": exc.text(language),
             "error_type": "LLMError",
         }
 
@@ -241,10 +246,7 @@ async def chat(
             )
 
         return {
-            "answer": (
-                "MCP mengalami error "
-                "pada transport."
-            ),
+            "answer": msg("mcp_transport", language),
             "error_type": "ExceptionGroup",
         }
 
@@ -255,10 +257,7 @@ async def chat(
         traceback.print_exc()
 
         return {
-            "answer": (
-                "Terjadi error pada "
-                "LLM → MCP → KnowBe4."
-            ),
+            "answer": msg("pipeline_error", language),
             "error_type": (
                 type(exc).__name__
             ),

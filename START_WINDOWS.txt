@@ -2,7 +2,7 @@ Quick start on Windows (PowerShell, in the project folder). README.md has the de
 
 One-time setup
 1. Install Python 3.12:   winget install --id Python.Python.3.12 --exact
-2. Install Ollama:        https://ollama.com/download/windows
+2. Install Ollama:        https://ollama.com/download/windows   (download in a browser if the connection is unreliable)
 3. Download the model:    ollama pull qwen3.5:4b          (if it stalls: Ctrl+C and run it again)
 4. Ollama settings:       setx OLLAMA_CONTEXT_LENGTH 32768
                           setx OLLAMA_FLASH_ATTENTION 1
@@ -14,7 +14,9 @@ One-time setup
                           Copy-Item config\consoles.example.yaml config\consoles.yaml
                           add your consoles to consoles.yaml and their Reporting API keys to .env
 7. Check the keys:        .\.venv\Scripts\python.exe test_knowbe4.py
-8. Check the model:       ollama ps   (should say 100% GPU and 32768)
+8. Check the model:       ollama run qwen3.5:4b --think=false "Reply with just the word OK."
+                          ollama ps   (should say 100% GPU and 32768)
+   After installing or updating Ollama, quit it from the tray and start it from the Start menu, then check ollama ps again.
 
 Every time
 1. Make sure Ollama is running (tray icon, or: ollama ps)

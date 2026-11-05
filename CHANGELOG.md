@@ -2,6 +2,16 @@
 
 All notable changes to this project are listed here. Dates are in YYYY-MM-DD format.
 
+## [Unreleased]
+
+### Added
+- Language choice: the chat page asks for Bahasa Indonesia or English on the first visit, remembers it, and has an ID | EN switch in the header. The model answers in the chosen language, and every server message exists in both (`agent/messages.py`). `POST /api/chat` accepts `"language": "id" | "en"`.
+
+### Changed
+- The model is told to report what the tools return without adding scales, ratings or interpretations unless asked.
+- Chat page: the Send button matches the question box height (42 px), the header no longer squeezes on phones, the placeholder is no longer clipped, and controls have accessible labels.
+- README: resumable `curl` download for the Ollama installer, and a note to restart Ollama after installing or updating it.
+
 ## [1.1.0] - 2026-11-05
 
 ### Changed

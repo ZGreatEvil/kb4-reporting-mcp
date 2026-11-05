@@ -68,11 +68,20 @@ The project uses the stable MCP v2 line (`mcp>=2,<3`). Do not create a top-level
 
 ## 3. Install Ollama and the model
 
-1. Install Ollama with the installer from [ollama.com/download/windows](https://ollama.com/download/windows) (`OllamaSetup.exe`), or in PowerShell:
+1. Install Ollama with the installer from [ollama.com/download/windows](https://ollama.com/download/windows) (`OllamaSetup.exe`, about 1.6 GB), or in PowerShell:
 
    ```powershell
    irm https://ollama.com/install.ps1 | iex
    ```
+
+   The PowerShell command cannot resume: on an unreliable connection it can fail part-way with "connection was aborted". If that happens, download the installer with `curl`, which resumes where it stopped (run the same line again if it gives up), then run it:
+
+   ```powershell
+   curl.exe -L -C - --retry 5 -o "$env:USERPROFILE\Downloads\OllamaSetup.exe" https://ollama.com/download/OllamaSetup.exe
+   & "$env:USERPROFILE\Downloads\OllamaSetup.exe"
+   ```
+
+   The installer leaves your downloaded models (in `%USERPROFILE%\.ollama`) and the `OLLAMA_*` settings alone, so reinstalling or upgrading does not mean downloading models again.
 
 2. Download the model (about 3.3 GB):
 
@@ -91,6 +100,8 @@ The project uses the stable MCP v2 line (`mcp>=2,<3`). Do not create a top-level
    ```
 
    Then quit Ollama from its tray icon (right-click → Quit) and start it again from the Start menu.
+
+   Do the same after installing or updating Ollama: the copy the installer starts can miss these settings (it ran with a 4096 context in testing) until Ollama is restarted from the Start menu. Step 4 shows how to check.
 
    `q8_0` stores the context cache at about half the memory of the default; it applies to every Ollama model on the machine.
 
@@ -217,6 +228,8 @@ Make sure Ollama is running (`ollama ps` answers), then in a second terminal:
 ```
 
 Check `http://127.0.0.1:8080/health`: it should show `"status": "ok"` with `"reachable": true` and `"model_pulled": true` under `llm`. `"degraded"` means Ollama is not running or the model is not pulled.
+
+On the first visit the page asks for a language, **Bahasa Indonesia** or **English**. The choice is remembered in that browser and can be changed any time with the **ID | EN** switch in the header. It sets the page text and the language the model answers in. Other clients can pass it to the API directly: `POST /api/chat` with `{"message": "...", "language": "id"}` or `"en"` (default `id`; anything else is rejected with HTTP 422).
 
 Open:
 
@@ -385,6 +398,7 @@ Layout:
 | `kb4_mcp/summaries.py` | Summary tools (sorting and arithmetic in Python) |
 | `agent/llm.py` | OpenAI-compatible client for the local model, with readable errors |
 | `agent/agent.py` | Tool loop: MCP session, console checks, truncation, system prompt |
+| `agent/messages.py` | Every user-facing server message in Indonesian and English |
 | `web/` | FastAPI app and the chat page |
 | `config/settings.py` | `.env` and `consoles.yaml` loading |
 
