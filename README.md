@@ -221,11 +221,27 @@ The server provides dedicated tools for the documented Reporting API resource fa
 
 KnowBe4 may add new endpoints. The raw GET tool is the compatibility escape hatch for any documented read-only `/v1/*` endpoint that has not yet received a dedicated wrapper.
 
+### Summary tools
+
+These fetch the full collection, do the sorting and arithmetic in Python and return a small result. The chat model is told to prefer them:
+
+| Tool | Returns |
+| --- | --- |
+| `compare_consoles_risk()` | Current risk score of every console, ranked, plus consoles without a key |
+| `top_users_by_risk(console, limit, status)` | Users ranked by `current_risk_score` |
+| `find_user(console, query)` | Users matching a name, email, job title or department, with their ids |
+| `phishing_campaign_summary(console, limit, sort)` | Phishing security tests, newest first (`sort=latest`) or worst first (`sort=highest_ppp`), with `phish_prone_percent` |
+| `training_completion_summary(console, campaign_id, start_date, end_date, limit)` | Training campaigns, newest first, with completion % and the average |
+
+Note on phish-prone values: on phishing security tests the API's `phish_prone_percentage` is a fraction (failure events ÷ emails delivered, so `0.25` means 25 %, and it can exceed `1` when people fail in more than one way), while on users it is already 0–100. `phishing_campaign_summary` converts the test value to a real percentage as `phish_prone_percent`. This was worked out from live data (it matched every test checked); KnowBe4's documentation does not state it.
+
 ## 11. Data size and LLM context safety
 
 The API can return very large datasets. The project therefore uses `KB4_MAX_RECORDS_PER_TOOL` as a safety ceiling (default 5,000). For large investigations, filter at the API level using supported parameters such as `status`, `group_id`, `campaign_id`, `user_id`, or `store_purchase_id`.
 
-The model should not be given an entire organization dataset unless that is truly required.
+The model should not be given an entire organization dataset unless that is truly required. The chat agent cuts any tool result longer than `LLM_MAX_TOOL_CHARS` (default 12,000 characters) down to the total count and the first rows, and tells the model to ask the user to narrow the question.
+
+Pagination follows KnowBe4's cursor scheme: the first request sends `cursor=0`, each response carries `pagination.nextCursor`, and the client sends that value back until it is `null`. Pages can be shorter than `per_page` before the end (training campaigns come back 10 at a time), so the client never stops on a short page. The risk score history endpoints return a plain list and reject paging parameters, so they are called without them.
 
 ## 12. Security notes
 
@@ -273,10 +289,10 @@ Regenerate/verify the KnowBe4 Reporting API key in the KnowBe4 Reporting API Man
 Lower:
 
 ```env
-KB4_RATE_LIMIT_RPS=4
+KB4_RATE_LIMIT_RPS=0.5
 ```
 
-The client also retries transient network errors with exponential backoff. If the API returns 429, your environment may need a more conservative request rate.
+The default is 0.8 requests a second (about 48 a minute), below the burst limit KnowBe4 is reported to apply. The client retries network errors, 429 and 502/503/504 with exponential backoff and honours `Retry-After`; a 500 is not retried. If 429s persist, lower the rate further.
 
 ### Local model errors
 

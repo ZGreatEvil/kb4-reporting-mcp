@@ -19,6 +19,14 @@ class KnowBe4APIError(RuntimeError):
         super().__init__(f"KnowBe4 API error {status_code}: {message}{suffix}")
 
 
+class KnowBe4RetryableError(KnowBe4APIError):
+    """429 or a transient 502/503/504; retried by _request"""
+
+
+RETRYABLE_STATUS = {429, 502, 503, 504}
+MAX_RETRY_AFTER_SECONDS = 60.0
+
+
 class AsyncRateLimiter:
     def __init__(self, rps: float):
         self.interval = 1.0 / max(rps, 0.1)
@@ -70,7 +78,7 @@ class KnowBe4Client:
         self._limiters.clear()
 
     @retry(
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
+        retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError, KnowBe4RetryableError)),
         stop=stop_after_attempt(4),
         wait=wait_exponential(multiplier=0.5, min=0.5, max=8),
         reraise=True,
@@ -81,6 +89,15 @@ class KnowBe4Client:
         await limiter.wait()
         response = await client.get(path, params=params)
         request_id = response.headers.get("X-Request-Id")
+        if response.status_code in RETRYABLE_STATUS:
+            # honour Retry-After (seconds) before tenacity's own backoff
+            try:
+                delay = float(response.headers.get("Retry-After", "0"))
+            except ValueError:
+                delay = 0.0
+            if delay > 0:
+                await asyncio.sleep(min(delay, MAX_RETRY_AFTER_SECONDS))
+            raise KnowBe4RetryableError(response.status_code, response.text[:1000], request_id)
         if response.status_code >= 400:
             safe_body = response.text[:1000]
             raise KnowBe4APIError(response.status_code, safe_body, request_id)
@@ -101,27 +118,33 @@ class KnowBe4Client:
     ) -> list[Any]:
         """Retrieve a whole collection using the 2026 cursor pagination convention.
 
-        KnowBe4 documents per_page (max 500) and cursor=0 as the starting point.
+        cursor=0 starts it; responses are {"data": [...], "pagination": {"perPage", "nextCursor"}},
+        and nextCursor (an opaque string, null on the last page) is sent back as cursor.
+        Pages can be shorter than per_page before the end, so only nextCursor decides when to stop.
         A safety ceiling prevents accidentally loading an unbounded dataset into the LLM context.
         """
         base_params = dict(params or {})
         per_page = self.config.kb4_per_page
         ceiling = min(max_records or self.config.kb4_max_records, self.config.kb4_max_records)
         results: list[Any] = []
-        cursor = 0
+        cursor: str = "0"
 
         while len(results) < ceiling:
             query = {**base_params, "per_page": per_page, "cursor": cursor}
             data = await self.get(console, path, query)
-            if not isinstance(data, list):
+            if isinstance(data, dict) and isinstance(data.get("data"), list):
+                rows = data["data"]
+                next_cursor = (data.get("pagination") or {}).get("nextCursor")
+            elif isinstance(data, list):
+                # an endpoint that ignores cursor returns everything at once
+                rows, next_cursor = data, None
+            else:
                 return [data]
-            if not data:
+
+            results.extend(rows[: ceiling - len(results)])
+            if not rows or not next_cursor or str(next_cursor) == cursor:
                 break
-            remaining = ceiling - len(results)
-            results.extend(data[:remaining])
-            if len(data) < per_page:
-                break
-            cursor += per_page
+            cursor = str(next_cursor)
 
         return results
 
@@ -129,7 +152,8 @@ class KnowBe4Client:
         return await self.get(console, "/v1/account")
 
     async def get_account_risk_history(self, console: str, full: bool = False) -> list[Any]:
-        return await self.list_paginated(console, "/v1/account/risk_score_history", {"full": str(full).lower()}, 2000)
+        # this endpoint returns a plain list and answers 500 to per_page/cursor
+        return await self.get(console, "/v1/account/risk_score_history", {"full": str(full).lower()})
 
     async def list_users(self, console: str, status: str | None = None, group_id: int | None = None, max_records: int | None = None) -> list[Any]:
         params = {}

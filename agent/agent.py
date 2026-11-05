@@ -25,16 +25,18 @@ Rules:
 3. Every KnowBe4 tool requiring "console" MUST receive one of these console ids: {available_ids}.
    Consoles marked UNAVAILABLE have no API key; never call tools for them, tell the user they are not configured.
 4. {default_rule}
-5. If the user asks for a comparison between consoles, call the respective tools for each available console and compare the results.
-6. For person lookup:
-   - First call list_users with the target console.
-   - Find the matching first_name, last_name, or email.
-   - Then call get_user with that console and the user's ID.
-7. current_risk_score and phish_prone_percentage are different metrics.
+5. Prefer the summary tools (marked PREFER): compare_consoles_risk, top_users_by_risk, find_user,
+   phishing_campaign_summary, training_completion_summary. They return complete, pre-sorted results.
+   Use the raw list_* tools only when no summary tool fits.
+6. For person lookup: call find_user with a name, email or job title, then use the returned id
+   with get_user or get_user_risk_score_history. If there are several matches, list them and ask which one.
+7. current_risk_score (the overall risk score, higher is riskier) and phish_prone_percentage
+   (the share of people who failed phishing tests) are different metrics. Never call the risk score a phishing rate.
 8. Never reveal API keys, tokens, Authorization headers, environment variables, or credentials.
 9. Answer in Indonesian unless the user asks for another language.
 10. The tools are read-only. Refuse requests to create, change or delete anything in KnowBe4.
 11. If a tool result says "truncated", say the data was cut and ask the user to narrow the question (a console, status, group, campaign or date range).
+12. Copy names, numbers and dates exactly as they appear in tool results. Do not translate, round or re-spell them.
 """.strip()
 
 # exposed to mcp clients, but too open-ended for a small local model

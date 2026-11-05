@@ -92,7 +92,7 @@ class AppConfig(BaseModel):
     kb4_max_retries: int = Field(default_factory=lambda: int(os.getenv("KB4_MAX_RETRIES", "4")))
     kb4_per_page: int = Field(default_factory=lambda: min(int(os.getenv("KB4_PER_PAGE", "500")), 500))
     kb4_max_records: int = Field(default_factory=lambda: int(os.getenv("KB4_MAX_RECORDS_PER_TOOL", "5000")))
-    kb4_rate_limit_rps: float = Field(default_factory=lambda: float(os.getenv("KB4_RATE_LIMIT_RPS", "8")))
+    kb4_rate_limit_rps: float = Field(default_factory=lambda: float(os.getenv("KB4_RATE_LIMIT_RPS", "0.8")))
     enable_raw_get: bool = Field(default_factory=lambda: os.getenv("ENABLE_RAW_GET", "true").lower() == "true")
 
 
