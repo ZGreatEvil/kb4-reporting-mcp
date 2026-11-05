@@ -1,0 +1,13 @@
+# copy to config/consoles.yaml and adjust.
+# each console needs: display_name, region (us, eu, ca, uk or de) and api_key_env,
+# the name of the .env variable that holds that console's Reporting API key.
+# a console whose key is missing is listed as unavailable.
+consoles:
+  main:
+    display_name: Main Company
+    region: us
+    api_key_env: KB4_MAIN_API_KEY
+  subsidiary:
+    display_name: Subsidiary
+    region: us
+    api_key_env: KB4_SUBSIDIARY_API_KEY

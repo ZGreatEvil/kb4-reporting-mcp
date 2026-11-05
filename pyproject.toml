@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "knowbe4-gemini-mcp"
+version = "1.0.0"
+description = "Multi-console KnowBe4 Reporting API MCP server with Gemini API chat interface."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=2.0,<3",
+  "google-genai>=2.3.0",
+  "httpx>=0.27,<1",
+  "python-dotenv>=1.0,<2",
+  "pydantic>=2.8,<3",
+  "pydantic-settings>=2.4,<3",
+  "PyYAML>=6.0,<7",
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "jinja2>=3.1,<4",
+  "tenacity>=9.0,<10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "pytest-asyncio>=0.24,<1", "ruff>=0.8,<1"]
+
+[tool.setuptools.packages.find]
+include = ["config*", "gemini*", "kb4_mcp*", "knowbe4*", "web*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]

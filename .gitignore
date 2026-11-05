@@ -1,0 +1,27 @@
+.venv/
+.env
+config/consoles.yaml
+__pycache__/
+.pytest_cache/
+*.pyc
+desktop.ini
+*.zip
+# planning notes
+*_BRIEF.md
+*.egg-info/
+# agent/tooling instructions and working notes stay local
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+AGENTS.md
+instructions.md
+.cursor/
+.windsurf/
+*.prompt.md
+# secrets and backups
+.env.*
+!.env.example
+*.pem
+*.key
+*.bak
+*.dump
