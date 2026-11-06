@@ -87,7 +87,6 @@ class AppConfig(BaseModel):
     mcp_host: str = Field(default_factory=lambda: os.getenv("MCP_HOST", "127.0.0.1"))
     mcp_port: int = Field(default_factory=lambda: int(os.getenv("MCP_PORT", "8000")))
     mcp_path: str = Field(default_factory=lambda: os.getenv("MCP_PATH", "/mcp"))
-    mcp_bearer_token: str = Field(default_factory=lambda: os.getenv("MCP_BEARER_TOKEN", ""))
     kb4_timeout_seconds: float = Field(default_factory=lambda: float(os.getenv("KB4_TIMEOUT_SECONDS", "30")))
     kb4_max_retries: int = Field(default_factory=lambda: int(os.getenv("KB4_MAX_RETRIES", "4")))
     kb4_per_page: int = Field(default_factory=lambda: min(int(os.getenv("KB4_PER_PAGE", "500")), 500))

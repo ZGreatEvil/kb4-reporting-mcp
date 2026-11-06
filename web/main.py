@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import AsyncIterator
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from agent.agent import Agent
@@ -43,6 +46,13 @@ HTML_PATH = (
 
 HTML = HTML_PATH.read_text(
     encoding="utf-8"
+)
+
+# app.css (built from tailwind.input.css)
+app.mount(
+    "/static",
+    StaticFiles(directory=HTML_PATH.parent),
+    name="static",
 )
 
 
@@ -262,3 +272,68 @@ async def chat(
                 type(exc).__name__
             ),
         }
+
+# =========================================================
+# CHAT (STREAMING)
+# =========================================================
+
+def _ndjson(event: dict) -> str:
+    return json.dumps(event, ensure_ascii=False) + "\n"
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(
+    req: ChatRequest,
+):
+    # one json event per line: thinking, tool, delta, reset, done or error
+    language = req.language
+
+    async def events() -> AsyncIterator[str]:
+
+        try:
+
+            async for event in AGENT.ask_stream(
+                req.message,
+                language,
+            ):
+                yield _ndjson(event)
+
+        except LLMError as exc:
+
+            print(
+                f"[CHAT LLM ERROR] {exc.key}",
+                flush=True,
+            )
+
+            yield _ndjson({"type": "error", "message": exc.text(language)})
+
+        except BaseExceptionGroup as exc:
+
+            for index, error in enumerate(
+                exc.exceptions,
+                start=1,
+            ):
+
+                print(
+                    f"[CHAT SUBERROR {index}] "
+                    f"{type(error).__name__}: {error}",
+                    flush=True,
+                )
+
+            yield _ndjson({"type": "error", "message": msg("mcp_transport", language)})
+
+        except Exception as exc:
+
+            print(
+                f"[CHAT STREAM ERROR] {type(exc).__name__}",
+                flush=True,
+            )
+
+            yield _ndjson({"type": "error", "message": msg("pipeline_error", language)})
+
+    return StreamingResponse(
+        events(),
+        media_type="application/x-ndjson",
+        # stop proxies and the browser from holding chunks back
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

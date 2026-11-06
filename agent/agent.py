@@ -200,11 +200,31 @@ class Agent:
         return self._truncate(self._mcp_result_text(result))
 
     async def ask(self, prompt: str, language: str = DEFAULT_LANGUAGE) -> str:
+        answer = ""
+        async for event in self._events(prompt, language, stream=False):
+            if event["type"] == "done":
+                answer = event["answer"]
+        return answer
+
+    async def ask_stream(self, prompt: str, language: str = DEFAULT_LANGUAGE) -> AsyncIterator[dict[str, Any]]:
+        """events: thinking, tool {name}, delta {text}, reset, done {answer}; LLMError propagates"""
+        async for event in self._events(prompt, language, stream=True):
+            yield event
+
+    async def _round(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], stream: bool) -> AsyncIterator[tuple[str, Any]]:
+        if not stream:
+            yield "end", await self.llm.chat(messages, tools)
+            return
+        async for kind, value in self.llm.chat_stream(messages, tools):
+            yield kind, value
+
+    async def _events(self, prompt: str, language: str, stream: bool) -> AsyncIterator[dict[str, Any]]:
         prompt = prompt.strip()
         if not prompt:
-            return msg("empty_question", language)
+            yield {"type": "done", "answer": msg("empty_question", language)}
+            return
 
-        print(f"[AGENT] User question received ({len(prompt)} chars, language={language})", flush=True)
+        print(f"[AGENT] User question received ({len(prompt)} chars, language={language}, stream={stream})", flush=True)
         max_loops = self.config.llm_max_tool_loops
 
         async with self._session_factory() as session:
@@ -220,7 +240,15 @@ class Agent:
             nudged = False
             for loop in range(max_loops):
                 print(f"[AGENT] {self.config.llm_model} | Loop {loop + 1}", flush=True)
-                choice = await self.llm.chat(messages, tools)
+                yield {"type": "thinking"}
+                streamed = False
+                choice = None
+                async for kind, value in self._round(messages, tools, stream):
+                    if kind == "content":
+                        streamed = True
+                        yield {"type": "delta", "text": value}
+                    else:
+                        choice = value
                 message = choice.message
                 calls = [c for c in (message.tool_calls or []) if getattr(c, "function", None)]
 
@@ -234,8 +262,14 @@ class Agent:
                         continue
                     if choice.finish_reason == "length":
                         answer += "\n\n" + msg("cut_off", language)
+                    answer = answer.strip() or msg("no_answer", language)
                     print("[AGENT] Final answer generated", flush=True)
-                    return answer.strip() or msg("no_answer", language)
+                    yield {"type": "done", "answer": answer}
+                    return
+
+                # text that arrived in a round that turned into tool calls is not the answer
+                if streamed:
+                    yield {"type": "reset"}
 
                 # history keeps the final output only, not the thinking text (qwen guidance)
                 messages.append({
@@ -251,7 +285,8 @@ class Agent:
                     ],
                 })
                 for call in calls:
+                    yield {"type": "tool", "name": call.function.name}
                     content = await self._run_tool(session, call, tool_names)
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
 
-        return msg("loop_limit", language, loops=max_loops)
+        yield {"type": "done", "answer": msg("loop_limit", language, loops=max_loops)}

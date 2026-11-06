@@ -7,8 +7,16 @@ All notable changes to this project are listed here. Dates are in YYYY-MM-DD for
 ### Added
 - Language choice: the chat page asks for Bahasa Indonesia or English on the first visit, remembers it, and has an ID | EN switch in the header. The model answers in the chosen language, and every server message exists in both (`agent/messages.py`). `POST /api/chat` accepts `"language": "id" | "en"`.
 
+- Streaming answers: `POST /api/chat/stream` sends newline-delimited JSON events (thinking, tool, delta, reset, done, error). The page shows the answer as it is written and what the agent is doing meanwhile ("Thinking…", "Fetching data: …").
+
 ### Changed
+- Tailwind CSS is pre-built into `web/static/app.css` (Tailwind 3.4.19 standalone CLI) instead of being compiled in the browser from the unpinned development CDN. The page looks the same; the build steps are in the README.
+- The page now times out after 180 seconds with no new event, instead of 180 seconds in total.
+- `KB4_MAX_RETRIES` is now used: it sets the number of retries after the first try (it was ignored and retries were fixed at 4 attempts).
 - The model is told to report what the tools return without adding scales, ratings or interpretations unless asked.
+
+### Removed
+- `MCP_BEARER_TOKEN`: it was documented but never enforced. The README now says plainly that the server has no authentication and must stay on localhost unless something authenticated is put in front of it.
 - Chat page: the Send button matches the question box height (42 px), the header no longer squeezes on phones, the placeholder is no longer clipped, and controls have accessible labels.
 - README: resumable `curl` download for the Ollama installer, and a note to restart Ollama after installing or updating it.
 

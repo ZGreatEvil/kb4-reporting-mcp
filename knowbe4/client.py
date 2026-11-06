@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import urljoin
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from config.settings import AppConfig, ConsoleConfig
 
@@ -77,13 +77,19 @@ class KnowBe4Client:
         self._clients.clear()
         self._limiters.clear()
 
-    @retry(
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError, KnowBe4RetryableError)),
-        stop=stop_after_attempt(4),
-        wait=wait_exponential(multiplier=0.5, min=0.5, max=8),
-        reraise=True,
-    )
     async def _request(self, console: str, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        # KB4_MAX_RETRIES counts retries after the first try
+        retrying = AsyncRetrying(
+            retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError, KnowBe4RetryableError)),
+            stop=stop_after_attempt(max(0, self.config.kb4_max_retries) + 1),
+            wait=wait_exponential(multiplier=0.5, min=0.5, max=8),
+            reraise=True,
+        )
+        async for attempt in retrying:
+            with attempt:
+                return await self._request_once(console, path, params)
+
+    async def _request_once(self, console: str, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         client = self._client(console)
         limiter = self._limiters[console.lower().strip()]
         await limiter.wait()

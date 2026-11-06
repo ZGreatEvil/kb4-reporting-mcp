@@ -92,6 +92,22 @@ async def test_429_is_retried(monkeypatch):
     assert await kb.get("main", "/v1/account") == {"name": "x"}
 
 
+@pytest.mark.parametrize("retries,expected_calls", [(0, 1), (2, 3)])
+async def test_max_retries_setting_is_used(monkeypatch, retries, expected_calls):
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(503, headers={"Retry-After": "0"})
+
+    kb = make_client(monkeypatch, handler, kb4_max_retries=retries)
+    # skip tenacity's backoff sleeps so the test stays fast
+    monkeypatch.setattr("knowbe4.client.wait_exponential", lambda **kw: (lambda state: 0))
+    with pytest.raises(KnowBe4APIError):
+        await kb.get("main", "/v1/account")
+    assert len(calls) == expected_calls
+
+
 async def test_500_is_not_retried(monkeypatch):
     calls = []
 

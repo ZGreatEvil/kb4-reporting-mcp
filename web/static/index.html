@@ -5,74 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>KnowBe4 AI Analyst</title>
 
-  <!-- Tailwind CSS CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- built from tailwind.input.css with the tailwind cli; see README, "Changing the styles" -->
+  <link rel="stylesheet" href="/static/app.css" />
   <!-- Marked.js for Markdown rendering, DOMPurify to sanitise model output -->
   <script src="https://cdn.jsdelivr.net/npm/marked@18.1.1/lib/marked.umd.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.17/dist/purify.min.js"></script>
   <!-- Lucide Icons -->
   <script src="https://cdn.jsdelivr.net/npm/lucide@1.61.0/dist/umd/lucide.min.js"></script>
 
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['"Segoe UI Variable"', '"Segoe UI"', '-apple-system', 'BlinkMacSystemFont', 'Roboto', 'sans-serif'],
-            mono: ['"Cascadia Mono"', 'Consolas', 'ui-monospace', 'monospace'],
-          },
-          colors: {
-            apple: {
-              subtle: 'rgba(255, 255, 255, 0.45)',
-              card: 'rgba(255, 255, 255, 0.65)',
-              darkCard: 'rgba(15, 23, 42, 0.6)',
-              accent: '#0071E3',
-              accentHover: '#0077ED',
-            }
-          },
-          boxShadow: {
-            'apple-glass': '0 20px 50px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(255, 255, 255, 0.8) inset',
-            'bubble-user': '0 8px 20px -4px rgba(0, 113, 227, 0.35)',
-            'bubble-ai': '0 4px 20px -2px rgba(0, 0, 0, 0.04), 0 1px 1px rgba(255, 255, 255, 0.9) inset',
-          }
-        }
-      }
-    }
-  </script>
-
-  <style>
-    /* Custom Scrollbar for Apple feel */
-    ::-webkit-scrollbar {
-      width: 6px;
-      height: 6px;
-    }
-    ::-webkit-scrollbar-track {
-      background: transparent;
-    }
-    ::-webkit-scrollbar-thumb {
-      background: rgba(150, 150, 150, 0.25);
-      border-radius: 9999px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-      background: rgba(150, 150, 150, 0.45);
-    }
-
-    /* Markdown inside AI chat bubble */
-    .prose-ai p { margin-bottom: 0.75rem; }
-    .prose-ai p:last-child { margin-bottom: 0; }
-    .prose-ai ul, .prose-ai ol { margin-left: 1.25rem; margin-bottom: 0.75rem; }
-    .prose-ai ul { list-style-type: disc; }
-    .prose-ai ol { list-style-type: decimal; }
-    .prose-ai li { margin-bottom: 0.25rem; }
-    .prose-ai strong { font-weight: 600; color: #0f172a; }
-    .prose-ai h1, .prose-ai h2, .prose-ai h3 { font-weight: 700; margin-top: 1rem; margin-bottom: 0.5rem; color: #0f172a; }
-    .prose-ai code { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; background: rgba(0,0,0,0.06); padding: 0.15rem 0.4rem; border-radius: 6px; font-size: 0.85em; }
-    .prose-ai pre { background: #0f172a; color: #f8fafc; padding: 1rem; border-radius: 12px; overflow-x: auto; margin: 0.75rem 0; }
-    .prose-ai pre code { background: transparent; color: inherit; padding: 0; }
-    .prose-ai table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; font-size: 0.875rem; }
-    .prose-ai th, .prose-ai td { border: 1px solid rgba(0, 0, 0, 0.08); padding: 8px 12px; text-align: left; }
-    .prose-ai th { background: rgba(0, 0, 0, 0.03); font-weight: 600; }
-  </style>
 </head>
 
 <body class="h-full bg-gradient-to-br from-[#E8EEF9] via-[#F4F6FB] to-[#E3E8F5] text-slate-800 antialiased selection:bg-blue-500 selection:text-white flex items-center justify-center p-3 md:p-6 overflow-hidden">
@@ -203,8 +143,8 @@
       })
       .catch(() => {});
 
-    // local models are slow; the agent may need several tool rounds
-    const CHAT_TIMEOUT_MS = 180000;
+    // give up only when nothing has arrived for this long; a long answer that keeps streaming is fine
+    const CHAT_IDLE_TIMEOUT_MS = 180000;
 
     // model output is untrusted html once rendered
     const renderMarkdown = (text) => DOMPurify.sanitize(marked.parse(text));
@@ -224,8 +164,10 @@
         sendLabel: 'Kirim pertanyaan',
         consoles: 'Konsol yang dikonfigurasi',
         loading: (s) => `Menganalisis data KnowBe4… (${s} dtk)`,
+        thinking: (s) => `Berpikir… (${s} dtk)`,
+        tool: (name, s) => `Mengambil data: ${name}… (${s} dtk)`,
         noAnswer: 'Tidak ada respons yang diterima.',
-        timeout: (s) => `Tidak ada jawaban dalam ${s} detik. Coba pertanyaan yang lebih sempit.`,
+        timeout: (s) => `Tidak ada respons selama ${s} detik. Coba pertanyaan yang lebih sempit.`,
         error: (m) => `Error: ${m}`,
       },
       en: {
@@ -236,8 +178,10 @@
         sendLabel: 'Send question',
         consoles: 'Configured consoles',
         loading: (s) => `Analysing KnowBe4 data… (${s} s)`,
+        thinking: (s) => `Thinking… (${s} s)`,
+        tool: (name, s) => `Fetching data: ${name}… (${s} s)`,
         noAnswer: 'No response received.',
-        timeout: (s) => `No answer within ${s} seconds. Try a narrower question.`,
+        timeout: (s) => `No response for ${s} seconds. Try a narrower question.`,
         error: (m) => `Error: ${m}`,
       },
     };
@@ -376,41 +320,72 @@
       busy = true;
       send.disabled = true;
 
-      // loading bubble with elapsed time, since local answers can take a while
-      const loadBubble = add(t.loading(0), 'ai', false);
-      loadBubble.setAttribute('aria-live', 'polite');
+      // status line with elapsed time until text arrives, since local answers can take a while
+      const bubble = add(t.loading(0), 'ai', false);
+      bubble.setAttribute('aria-live', 'polite');
+      bubble.setAttribute('aria-busy', 'true');
       const started = Date.now();
-      const ticker = setInterval(() => {
-        const secs = Math.round((Date.now() - started) / 1000);
-        loadBubble.textContent = t.loading(secs);
-      }, 1000);
+      const secs = () => Math.round((Date.now() - started) / 1000);
+      let status = (s) => t.loading(s);
+      let text = '';
+      const showStatus = () => { if (!text) bubble.textContent = status(secs()); };
+      const ticker = setInterval(showStatus, 1000);
+
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+      let idle;
+      const touch = () => {
+        clearTimeout(idle);
+        idle = setTimeout(() => controller.abort(), CHAT_IDLE_TIMEOUT_MS);
+      };
+      const showError = (message) => {
+        const span = document.createElement('span');
+        span.className = 'text-rose-500 font-medium';
+        span.textContent = '⚠️ ' + message;
+        bubble.replaceChildren(span);
+      };
+      let finished = false;
+
+      const handle = (ev) => {
+        if (ev.type === 'thinking') { status = t.thinking; showStatus(); }
+        else if (ev.type === 'tool') { status = (s) => t.tool(ev.name, s); showStatus(); }
+        else if (ev.type === 'delta') { text += ev.text; bubble.innerHTML = renderMarkdown(text); }
+        else if (ev.type === 'reset') { text = ''; showStatus(); }
+        else if (ev.type === 'done') { finished = true; text = ev.answer || t.noAnswer; bubble.innerHTML = renderMarkdown(text); }
+        else if (ev.type === 'error') { finished = true; showError(ev.message); }
+        chat.scrollTop = chat.scrollHeight;
+      };
 
       try {
-        const r = await fetch('/api/chat', {
+        touch();
+        const r = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: m, language: requestLang }),
           signal: controller.signal
         });
-
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = await r.json();
-        const answer = data.answer || t.noAnswer;
-        clearInterval(ticker);
-        loadBubble.innerHTML = renderMarkdown(answer);
+
+        // one json event per line; a chunk can end mid-line
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          touch();
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) if (line.trim()) handle(JSON.parse(line));
+        }
+        if (buffer.trim()) handle(JSON.parse(buffer));
+        if (!finished) showError(t.noAnswer);
       } catch (err) {
-        clearInterval(ticker);
-        const text = err.name === 'AbortError'
-          ? t.timeout(CHAT_TIMEOUT_MS / 1000)
-          : t.error(err.message);
-        const span = document.createElement('span');
-        span.className = 'text-rose-500 font-medium';
-        span.textContent = '⚠️ ' + text;
-        loadBubble.replaceChildren(span);
+        showError(err.name === 'AbortError' ? t.timeout(CHAT_IDLE_TIMEOUT_MS / 1000) : t.error(err.message));
       } finally {
-        clearTimeout(timeout);
+        clearInterval(ticker);
+        clearTimeout(idle);
+        bubble.setAttribute('aria-busy', 'false');
         busy = false;
         send.disabled = false;
         input.focus();

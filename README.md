@@ -217,7 +217,7 @@ This server is **read-only**. No POST/PUT/PATCH/DELETE KnowBe4 operation is expo
 
 ### MCP authentication
 
-For a local-only deployment the default server binds to `127.0.0.1`. If you later expose it beyond localhost, add a proper MCP authentication layer before doing so. The `.env` file includes `MCP_BEARER_TOKEN` as a reserved setting for that next step; the sample server deliberately does not claim that value is enforced automatically by the MCP SDK.
+The server has no authentication of its own and binds to `127.0.0.1`, so only programs on this machine can reach it. Do not expose it beyond localhost without putting a real authentication layer (for example an authenticated reverse proxy over HTTPS) in front of it.
 
 ## 8. Start the web chat
 
@@ -230,6 +230,19 @@ Make sure Ollama is running (`ollama ps` answers), then in a second terminal:
 Check `http://127.0.0.1:8080/health`: it should show `"status": "ok"` with `"reachable": true` and `"model_pulled": true` under `llm`. `"degraded"` means Ollama is not running or the model is not pulled.
 
 On the first visit the page asks for a language, **Bahasa Indonesia** or **English**. The choice is remembered in that browser and can be changed any time with the **ID | EN** switch in the header. It sets the page text and the language the model answers in. Other clients can pass it to the API directly: `POST /api/chat` with `{"message": "...", "language": "id"}` or `"en"` (default `id`; anything else is rejected with HTTP 422).
+
+The page uses `POST /api/chat/stream` (same request body), which answers with one JSON event per line (`application/x-ndjson`) so the answer appears as it is written:
+
+| Event | Meaning |
+| --- | --- |
+| `{"type": "thinking"}` | The model is working on the next step |
+| `{"type": "tool", "name": "..."}` | A tool is being called |
+| `{"type": "delta", "text": "..."}` | More answer text |
+| `{"type": "reset"}` | Discard the text so far (it belonged to a step that turned into a tool call) |
+| `{"type": "done", "answer": "..."}` | Finished; `answer` is the complete final text |
+| `{"type": "error", "message": "..."}` | Failed; `message` is already in the chosen language |
+
+The page gives up only after 180 seconds without any event, so long answers that keep progressing are not cut off. `POST /api/chat` still returns the whole answer in one response.
 
 Open:
 
@@ -383,6 +396,24 @@ Run the tests (no Ollama, KnowBe4 or network needed; the agent, pagination and s
 .\.venv\Scripts\python.exe -m pytest
 ```
 
+### Changing the styles
+
+The page uses Tailwind CSS 3, pre-built into `web/static/app.css` (committed, so running the app needs no build step). After changing class names in `web/static/index.html`, `tailwind.config.js` or `web/static/tailwind.input.css`, rebuild it with Tailwind's standalone CLI (no Node.js needed). Download it once and check it against the published checksums:
+
+```powershell
+$d = "$env:TEMP\tw"; New-Item -ItemType Directory -Force $d | Out-Null
+curl.exe -L --retry 5 -o "$d\tailwindcss.exe" https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.19/tailwindcss-windows-x64.exe
+curl.exe -L -o "$d\sha256sums.txt" https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.19/sha256sums.txt
+(Get-FileHash "$d\tailwindcss.exe" -Algorithm SHA256).Hash.ToLower()
+Select-String -Path "$d\sha256sums.txt" -Pattern 'windows-x64'
+```
+
+The two hashes must match. Then, from the project folder:
+
+```powershell
+& "$env:TEMP\tw\tailwindcss.exe" -c tailwind.config.js -i web/static/tailwind.input.css -o web/static/app.css --minify
+```
+
 Basic syntax check:
 
 ```powershell
@@ -399,7 +430,7 @@ Layout:
 | `agent/llm.py` | OpenAI-compatible client for the local model, with readable errors |
 | `agent/agent.py` | Tool loop: MCP session, console checks, truncation, system prompt |
 | `agent/messages.py` | Every user-facing server message in Indonesian and English |
-| `web/` | FastAPI app and the chat page |
+| `web/` | FastAPI app and the chat page (`static/app.css` is built from `static/tailwind.input.css` with `tailwind.config.js`) |
 | `config/settings.py` | `.env` and `consoles.yaml` loading |
 
 ## 15. Important implementation note about 2026 pagination
