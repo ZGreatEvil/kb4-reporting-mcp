@@ -146,6 +146,8 @@ The `LLM_*` defaults already point at Ollama on this machine:
 | `LLM_TIMEOUT_SECONDS` | `180` | Per model call |
 | `LLM_EXPOSE_RAW_GET` | `false` | Hides the open-ended `knowbe4_raw_get` tool from the chat model |
 | `KB4_RATE_LIMIT_RPS` | `0.8` | KnowBe4 requests per second (about 48 a minute) |
+| `KB4_CACHE_SECONDS` | `600` | KnowBe4 answers are reused for this long, so repeat and follow-up questions cost no requests. `0` always fetches fresh |
+| `KB4_DAILY_LIMIT` | empty | Requests per console per rolling 24 hours. Empty uses KnowBe4's limit: 2,000 plus the account's licensed seats |
 
 ## 5. Configure KnowBe4 consoles
 
@@ -369,7 +371,7 @@ Lower:
 KB4_RATE_LIMIT_RPS=0.5
 ```
 
-The default is 0.8 requests a second (about 48 a minute), below the burst limit KnowBe4 is reported to apply. The client retries network errors, 429 and 502/503/504 with exponential backoff and honours `Retry-After`; a 500 is not retried. If 429s persist, lower the rate further.
+KnowBe4's documented limits are 4 requests a second, 50 a minute, and 2,000 a day plus the number of licensed users. The default is 0.8 requests a second (about 48 a minute). The client also counts real requests per console over a rolling 24 hours (saved in `.kb4_usage.json`, git-ignored), warns in the MCP server log at 80 % and, at the limit, refuses with a clear message instead of calling KnowBe4. `list_consoles` shows the current count. Answers from the last `KB4_CACHE_SECONDS` are reused and do not count. The client retries network errors, 429 and 502/503/504 with exponential backoff and honours `Retry-After`; a 500 is not retried. If 429s persist, lower the rate further.
 
 ### Local model errors
 

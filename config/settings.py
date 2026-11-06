@@ -92,6 +92,11 @@ class AppConfig(BaseModel):
     kb4_per_page: int = Field(default_factory=lambda: min(int(os.getenv("KB4_PER_PAGE", "500")), 500))
     kb4_max_records: int = Field(default_factory=lambda: int(os.getenv("KB4_MAX_RECORDS_PER_TOOL", "5000")))
     kb4_rate_limit_rps: float = Field(default_factory=lambda: float(os.getenv("KB4_RATE_LIMIT_RPS", "0.8")))
+    # successful KnowBe4 responses are reused for this long; 0 turns the cache off
+    kb4_cache_seconds: float = Field(default_factory=lambda: float(os.getenv("KB4_CACHE_SECONDS", "600")))
+    # requests per console per rolling 24 h; unset = 2,000 + the account's licensed seats (KnowBe4's documented limit)
+    kb4_daily_limit: int | None = Field(default_factory=lambda: int(v) if (v := os.getenv("KB4_DAILY_LIMIT", "").strip()) else None)
+    kb4_usage_file: Path = Field(default_factory=lambda: Path(os.getenv("KB4_USAGE_FILE", "") or ROOT / ".kb4_usage.json"))
     enable_raw_get: bool = Field(default_factory=lambda: os.getenv("ENABLE_RAW_GET", "true").lower() == "true")
 
 

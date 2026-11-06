@@ -9,6 +9,8 @@ desktop.ini
 # planning notes
 *_BRIEF.md
 *.egg-info/
+# local KnowBe4 request counter
+.kb4_usage.json
 # agent/tooling instructions and working notes stay local
 CLAUDE.md
 CLAUDE.local.md

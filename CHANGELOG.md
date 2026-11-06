@@ -5,6 +5,9 @@ All notable changes to this project are listed here. Dates are in YYYY-MM-DD for
 ## [Unreleased]
 
 ### Added
+- Short-term memory for KnowBe4 answers (`KB4_CACHE_SECONDS`, default 10 minutes): repeat and follow-up questions reuse data instead of fetching it again. Errors are never cached.
+- Daily request counter per console (rolling 24 hours, saved in `.kb4_usage.json`), following KnowBe4's documented limit of 2,000 requests a day plus licensed users (`KB4_DAILY_LIMIT` overrides it). It warns at 80 % and refuses with a clear message at the limit; `list_consoles` shows the count.
+- KnowBe4 failures (key rejected, not found, rate or daily limit, network) now reach the model as readable messages instead of "Error executing tool".
 - Language choice: the chat page asks for Bahasa Indonesia or English on the first visit, remembers it, and has an ID | EN switch in the header. The model answers in the chosen language, and every server message exists in both (`agent/messages.py`). `POST /api/chat` accepts `"language": "id" | "en"`.
 
 - Streaming answers: `POST /api/chat/stream` sends newline-delimited JSON events (thinking, tool, delta, reset, done, error). The page shows the answer as it is written and what the agent is doing meanwhile ("Thinking…", "Fetching data: …").

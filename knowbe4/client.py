@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import json
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urljoin
 
@@ -23,8 +26,55 @@ class KnowBe4RetryableError(KnowBe4APIError):
     """429 or a transient 502/503/504; retried by _request"""
 
 
+class KnowBe4DailyLimitError(KnowBe4APIError):
+    """refused locally before calling KnowBe4, so the real daily limit is never hit"""
+
+    def __init__(self, used: int, limit: int):
+        self.used = used
+        self.limit = limit
+        super().__init__(429, f"daily request limit reached ({used} of {limit} in the last 24 hours)")
+
+
 RETRYABLE_STATUS = {429, 502, 503, 504}
 MAX_RETRY_AFTER_SECONDS = 60.0
+
+# KnowBe4 docs: 2,000 requests per day plus the number of licensed users
+BASE_DAILY_REQUESTS = 2000
+DAY_SECONDS = 24 * 3600
+WARN_AT = 0.8
+MAX_CACHE_ENTRIES = 1000
+
+
+class UsageTracker:
+    """real requests per console over a rolling 24 h, saved to a small json file so restarts don't reset it"""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._stamps: Dict[str, list[float]] = self._load()
+
+    def _load(self) -> Dict[str, list[float]]:
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            return {k: [float(t) for t in v] for k, v in data.items() if isinstance(v, list)}
+        except (OSError, ValueError, AttributeError, TypeError):
+            return {}
+
+    def _recent(self, console: str, now: float) -> list[float]:
+        stamps = [t for t in self._stamps.get(console, []) if t > now - DAY_SECONDS]
+        self._stamps[console] = stamps
+        return stamps
+
+    def used(self, console: str, now: float | None = None) -> int:
+        return len(self._recent(console, time.time() if now is None else now))
+
+    def record(self, console: str, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        self._recent(console, now).append(now)
+        try:
+            self.path.write_text(json.dumps(self._stamps), encoding="utf-8")
+        except OSError:
+            # counting still works in memory
+            pass
 
 
 class AsyncRateLimiter:
@@ -47,6 +97,10 @@ class KnowBe4Client:
         self.config = config
         self._clients: Dict[str, httpx.AsyncClient] = {}
         self._limiters: Dict[str, AsyncRateLimiter] = {}
+        self._cache: Dict[tuple, tuple[float, Any]] = {}
+        self.usage = UsageTracker(config.kb4_usage_file)
+        self._daily_limits: Dict[str, int] = {}
+        self._warned: set[str] = set()
 
     def _console(self, console: str) -> ConsoleConfig:
         key = console.lower().strip()
@@ -91,8 +145,11 @@ class KnowBe4Client:
 
     async def _request_once(self, console: str, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         client = self._client(console)
-        limiter = self._limiters[console.lower().strip()]
+        key = console.lower().strip()
+        limiter = self._limiters[key]
         await limiter.wait()
+        # every attempt counts against KnowBe4's daily limit, retries included
+        self.usage.record(key)
         response = await client.get(path, params=params)
         request_id = response.headers.get("X-Request-Id")
         if response.status_code in RETRYABLE_STATUS:
@@ -109,11 +166,63 @@ class KnowBe4Client:
             raise KnowBe4APIError(response.status_code, safe_body, request_id)
         return response.json()
 
+    async def daily_limit(self, console: str) -> int:
+        key = console.lower().strip()
+        if self.config.kb4_daily_limit is not None:
+            return self.config.kb4_daily_limit
+        if key not in self._daily_limits:
+            # provisional value while the account (and its seat count) is fetched through the normal path
+            self._daily_limits[key] = BASE_DAILY_REQUESTS
+            try:
+                account = await self.get(key, "/v1/account")
+                seats = account.get("number_of_seats") if isinstance(account, dict) else None
+                if isinstance(seats, int) and seats > 0:
+                    self._daily_limits[key] = BASE_DAILY_REQUESTS + seats
+            except (KnowBe4APIError, httpx.HTTPError):
+                pass
+        return self._daily_limits[key]
+
+    async def _check_daily_limit(self, console: str) -> None:
+        key = console.lower().strip()
+        limit = await self.daily_limit(key)
+        used = self.usage.used(key)
+        if used >= limit:
+            raise KnowBe4DailyLimitError(used, limit)
+        if used >= WARN_AT * limit and key not in self._warned:
+            self._warned.add(key)
+            print(f"[KB4 WARNING] console {key}: {used} of {limit} daily requests used", flush=True)
+
+    def usage_summary(self, console: str) -> Dict[str, Any]:
+        key = console.lower().strip()
+        limit = self.config.kb4_daily_limit or self._daily_limits.get(key)
+        return {"requests_last_24h": self.usage.used(key), "daily_limit": limit}
+
+    def _cache_key(self, console: str, path: str, params: Optional[Dict[str, Any]]) -> tuple:
+        items = tuple(sorted((str(k), str(v)) for k, v in (params or {}).items()))
+        return (console.lower().strip(), path, items)
+
     async def get(self, console: str, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         path = "/" + path.lstrip("/")
         if not path.startswith("/v1/"):
             raise ValueError("Only KnowBe4 Reporting API /v1/* paths are allowed")
-        return await self._request(console, path, params)
+
+        ttl = self.config.kb4_cache_seconds
+        key = self._cache_key(console, path, params)
+        now = time.monotonic()
+        hit = self._cache.get(key)
+        if ttl > 0 and hit and hit[0] > now:
+            # copies, so a caller sorting or editing results can't change the cache
+            return copy.deepcopy(hit[1])
+
+        await self._check_daily_limit(console)
+        data = await self._request(console, path, params)
+        if ttl > 0:
+            if len(self._cache) >= MAX_CACHE_ENTRIES:
+                self._cache = {k: v for k, v in self._cache.items() if v[0] > now}
+                while len(self._cache) >= MAX_CACHE_ENTRIES:
+                    self._cache.pop(next(iter(self._cache)))
+            self._cache[key] = (now + ttl, data)
+        return copy.deepcopy(data)
 
     async def list_paginated(
         self,

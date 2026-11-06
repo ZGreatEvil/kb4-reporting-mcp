@@ -126,7 +126,9 @@ class Agent:
     @staticmethod
     def _mcp_result_text(result: Any) -> str:
         if getattr(result, "is_error", False):
-            return _error("MCP tool returned an error.")
+            # ToolError messages (key rejected, daily limit, not found) are meant for the model
+            text = " ".join(t for t in (getattr(i, "text", None) for i in getattr(result, "content", None) or []) if t)
+            return _error(text or "MCP tool returned an error.")
 
         structured = getattr(result, "structured_content", None)
         if structured is not None:

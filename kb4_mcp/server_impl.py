@@ -1,17 +1,48 @@
+import httpx
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from config.settings import load_config
-from knowbe4.client import KnowBe4Client
+from knowbe4.client import KnowBe4APIError, KnowBe4Client, KnowBe4DailyLimitError
 from kb4_mcp import summaries
 
 from typing import Optional
 
+STATUS_HINTS = {
+    401: "the API key was rejected (wrong, expired, or not a Reporting API key)",
+    403: "the API key is not allowed to read this data",
+    404: "not found; check the id",
+    429: "KnowBe4 rate limit hit; try again in a few minutes",
+}
+
+
+def tool_message(exc: Exception) -> str:
+    if isinstance(exc, KnowBe4DailyLimitError):
+        return (f"KnowBe4 daily API limit reached for this console ({exc.used} of {exc.limit} requests "
+                "in the last 24 hours). Tell the user to try again later.")
+    if isinstance(exc, KnowBe4APIError):
+        return f"KnowBe4 API error {exc.status_code}: {STATUS_HINTS.get(exc.status_code, 'the request failed')}."
+    if isinstance(exc, httpx.HTTPError):
+        return "KnowBe4 could not be reached (network error or timeout). Try again later."
+    return str(exc)
+
+
+class ToolClient(KnowBe4Client):
+    """turns KnowBe4 failures into ToolError, whose message the model can read; other exceptions are masked by the sdk"""
+
+    async def get(self, console, path, params=None):
+        try:
+            return await super().get(console, path, params)
+        except (KnowBe4APIError, httpx.HTTPError, ValueError) as exc:
+            raise ToolError(tool_message(exc)) from exc
+
+
 CONFIG=load_config()
-KB4=KnowBe4Client(CONFIG)
+KB4=ToolClient(CONFIG)
 mcp=MCPServer("KnowBe4 Multi-Console Reporting", instructions="Read-only KnowBe4 Reporting API server. Prefer the summary tools; never reveal API keys.", version="1.1.0")
 
-@mcp.tool(description="List configured consoles and whether each has an API key.")
+@mcp.tool(description="List configured consoles, whether each has an API key, and KnowBe4 requests used in the last 24 hours.")
 def list_consoles()->dict:
-    return {"consoles":[{"id":k,"display_name":c.display_name,"region":c.region,"base_url":c.base_url,"available":c.has_api_key} for k,c in CONFIG.consoles.items()]}
+    return {"consoles":[{"id":k,"display_name":c.display_name,"region":c.region,"base_url":c.base_url,"available":c.has_api_key,"api_usage":KB4.usage_summary(k)} for k,c in CONFIG.consoles.items()]}
 
 # summary tools: computed in python, small results; the chat model should prefer these
 @mcp.tool(description="PREFER for comparisons: current risk score of every console, ranked, plus consoles without a key.")
