@@ -43,6 +43,7 @@
       loading: (s) => `Menganalisis data KnowBe4… (${s} dtk)`,
       thinking: (s) => `Berpikir… (${s} dtk)`,
       tool: (name, s) => `Mengambil data: ${name}… (${s} dtk)`,
+      writing: (s) => `Menyusun jawaban… (${s} dtk)`,
       noAnswer: 'Tidak ada respons yang diterima.',
       timeout: (s) => `Tidak ada respons selama ${s} detik. Coba pertanyaan yang lebih sempit.`,
       network: 'Tidak dapat terhubung ke server. Periksa apakah server sedang berjalan, lalu coba lagi.',
@@ -73,6 +74,7 @@
       loading: (s) => `Analysing KnowBe4 data… (${s} s)`,
       thinking: (s) => `Thinking… (${s} s)`,
       tool: (name, s) => `Fetching data: ${name}… (${s} s)`,
+      writing: (s) => `Writing the answer… (${s} s)`,
       noAnswer: 'No response received.',
       timeout: (s) => `No response for ${s} seconds. Try a narrower question.`,
       network: 'Cannot reach the server. Check that it is running, then try again.',
@@ -332,8 +334,10 @@
     const started = Date.now();
     const secs = () => Math.round((Date.now() - started) / 1000);
     let status = (s) => t.loading(s);
-    let text = '';
-    const showProgress = () => { if (!text) bubble.textContent = status(secs()); };
+    let finished = false;
+    // progress only until the answer is final: showing text as it was written meant a checked or redone answer
+    // (and the chart that comes after it) made the text vanish and appear twice
+    const showProgress = () => { if (!finished) bubble.textContent = status(secs()); };
     const ticker = setInterval(showProgress, 1000);
 
     const controller = new AbortController();
@@ -347,30 +351,27 @@
     let failed = false;
     const showError = (message) => {
       failed = true;
+      finished = true;  // the progress ticker must not write over it
       const span = document.createElement('span');
       span.className = 'text-rose-600 dark:text-rose-400 font-medium';
       span.textContent = '⚠️ ' + message;
       bubble.replaceChildren(span);
     };
-    let finished = false;
-    // re-rendering markdown on every chunk froze the page on long answers; ~10 renders a second is plenty
-    let renderTimer = null;
-    const renderNow = () => {
-      renderTimer = null;
+    const renderAnswer = (text) => {
       chat.dataset.follow = keepBottom(() => bubble.replaceChildren(renderMarkdown(text))) ? '1' : '0';
     };
-    const scheduleRender = () => { if (!renderTimer) renderTimer = setTimeout(renderNow, 100); };
 
     const handle = (ev) => {
       if (ev.type === 'thinking') { status = t.thinking; showProgress(); }
       else if (ev.type === 'tool') { status = (s) => t.tool(ev.name, s); showProgress(); }
-      else if (ev.type === 'delta') { text += ev.text; scheduleRender(); }
-      else if (ev.type === 'reset') { clearTimeout(renderTimer); renderTimer = null; text = ''; showProgress(); }
+      else if (ev.type === 'delta') { status = t.writing; showProgress(); }
+      else if (ev.type === 'reset') { status = t.thinking; showProgress(); }
       else if (ev.type === 'done') {
-        clearTimeout(renderTimer); finished = true; text = ev.answer || t.noAnswer; renderNow();
+        finished = true;
+        renderAnswer(ev.answer || t.noAnswer);
         if (ev.answer) remember(m, ev.note, ev.answer);
       }
-      else if (ev.type === 'error') { clearTimeout(renderTimer); finished = true; showError(ev.message); }
+      else if (ev.type === 'error') { finished = true; showError(ev.message); }
       toBottom();
     };
 
@@ -401,9 +402,8 @@
         for (const line of lines) if (line.trim()) handle(JSON.parse(line));
       }
       if (buffer.trim()) handle(JSON.parse(buffer));
-      if (!finished) { clearTimeout(renderTimer); showError(t.noAnswer); }
+      if (!finished) showError(t.noAnswer);
     } catch (err) {
-      clearTimeout(renderTimer);
       // "new chat" aborts on purpose; that bubble is already gone
       if (asked !== conversation) return;
       if (timedOut) showError(t.timeout(CHAT_IDLE_TIMEOUT_MS / 1000));

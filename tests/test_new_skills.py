@@ -266,7 +266,7 @@ async def test_charts_and_exports_follow_the_period(tmp_path, monkeypatch):
     monkeypatch.setattr(outputs, "EXPORT_DIR", tmp_path)
     chart = await outputs.make_chart(FakeKB(), "main", "phishing_tests", "en", start_date="2026-05-01")
     assert [x["name"] for x in chart["summary"]["tests"]] == ["Mid", "New"]
-    assert chart["title"].endswith("(2026-05-01 to today)") and chart["period"] == "2026-05-01 to today"
+    assert chart["title"].endswith("(2026-05-01 – today)") and chart["period"] == "2026-05-01 to today"
     current = await outputs.make_chart(FakeKB(), "main", "groups", "en", start_date="2026-05-01")
     assert current["period"] == "all data"  # today's state has no period
     export = await outputs.export_csv(FakeKB(), "main", "phishing_tests", start_date="2026-05-01", end_date="2026-06-30")

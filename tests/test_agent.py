@@ -7,6 +7,7 @@ import pytest
 from agent.agent import Agent
 from agent.llm import LLMClient, LLMError
 from agent.messages import msg
+from agent.period import default_period
 from config.settings import AppConfig, ConsoleConfig
 
 
@@ -44,6 +45,7 @@ class FakeSession:
     def __init__(self, results=None):
         self.results = results or {}
         self.calls = []
+        self.raw_calls = []
         names = ["get_account", "list_users_page", "knowbe4_raw_get", "list_users", "get_user_risk_score_history"]
         self.tools = [
             SimpleNamespace(
@@ -58,7 +60,12 @@ class FakeSession:
         return SimpleNamespace(tools=self.tools)
 
     async def call_tool(self, name, arguments):
-        self.calls.append((name, dict(arguments)))
+        args = dict(arguments)
+        self.raw_calls.append((name, dict(args)))
+        # the default past-year start is checked by its own test; elsewhere it would only add noise
+        if args.get("start_date") == default_period().start.isoformat() and "end_date" not in args:
+            args.pop("start_date")
+        self.calls.append((name, args))
         # by default a small account answer: the fake model's answers may only quote numbers the "data" holds
         payload = self.results.get(name, {"ok": True, "current_risk_score": 39.4, "total_users": 55, "risk_score": 40.24})
         return SimpleNamespace(is_error=False, structured_content=None, content=[SimpleNamespace(text=json.dumps(payload))])
@@ -919,3 +926,96 @@ async def test_forecast_line_stays_for_a_forecast_question(monkeypatch):
                    reply(f"{line}\n\nRisk score sekarang 39,4.")])
     answer = await make_agent(make_config(monkeypatch), llm, FakeSession()).ask("Berapa risk score bulan depan?")
     assert answer.startswith(line)
+
+
+async def test_no_period_in_the_question_means_the_past_year(monkeypatch):
+    llm = FakeLLM([
+        reply(calls=[tool_call("a", "phishing_campaign_summary", '{"console": "main"}'),
+                     tool_call("b", "overdue_training", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Ringkasan.**"),
+    ])
+    session = FakeSession()
+    session.tools += [SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in ("phishing_campaign_summary", "overdue_training")]
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("Bagaimana hasil tes phishing?")
+    year_ago = default_period().start.isoformat()
+    assert session.raw_calls == [
+        ("phishing_campaign_summary", {"console": "main", "start_date": year_ago}),
+        ("overdue_training", {"console": "main"}),  # still overdue today, whenever it was enrolled
+    ]
+    assert "KnowBe4 tidak menyimpannya per periode" not in answer  # no "period not applied" note for the default
+
+
+@pytest.mark.parametrize("question,guidance", [
+    ("bagaimana cara mengukur efektivitas program security awareness training?", True),
+    ("gimana cara menurunkan klik phishing karyawan?", True),
+    ("How can we improve our phishing simulation program?", True),
+    ("apa yang harus dilakukan supaya training lebih efektif?", True),
+    ("rekomendasi untuk karyawan yang sering klik phishing", True),
+    ("Berapa risk score sekarang?", False),
+    ("Siapa 10 pengguna paling berisiko?", False),
+    ("Export semua pengguna ke CSV.", False),
+    ("bagaimana cara export csv?", False),             # how-to, but not about awareness
+])
+def test_guidance_questions_use_the_nist_library(question, guidance):
+    from agent.agent import AWARENESS_TOPIC, GUIDANCE_ASK, NIST_ASK
+
+    asks = bool(NIST_ASK.search(question) or (GUIDANCE_ASK.search(question) and AWARENESS_TOPIC.search(question)))
+    assert asks is guidance
+
+
+async def test_a_guidance_question_without_nist_gets_the_library(monkeypatch):
+    llm = FakeLLM([
+        reply("Ukur dengan survei."),
+        reply(calls=[tool_call("a", "search_nist", '{"query": "measure awareness training effectiveness"}')], finish="tool_calls"),
+        reply("Ukur perubahan perilaku dan hasil simulasi."),
+    ])
+    session = FakeSession({"search_nist": {"results": [{"source": "SP 800-50r1", "pdf_page": 41, "text": "x"}]}})
+    session.tools.append(SimpleNamespace(name="search_nist", description="d", input_schema={"type": "object"}))
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask(
+        "bagaimana cara mengukur efektivitas program security awareness training?")
+    assert [n for n, _ in session.calls] == ["search_nist"]
+    assert answer.endswith("**Sumber:** NIST SP 800-50r1 (hlm. PDF 41)")
+
+
+async def test_images_the_model_writes_are_removed_even_without_a_chart(monkeypatch):
+    llm = FakeLLM([
+        reply(calls=[tool_call("a", "get_account", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Tes terakhir: 1 orang klik.**\n\n![Detail tes phishing terbaru (testing 2)](detail.png)\n\nSelesai."),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, FakeSession()).ask("siapa yang klik tes terakhir")
+    assert answer == "**Tes terakhir: 1 orang klik.**\n\nSelesai."
+
+
+async def test_lanjut_uses_the_notes_offset_even_when_the_model_sends_another(monkeypatch):
+    llm = FakeLLM([reply(calls=[tool_call("a", "list_users_page", '{"console": "main", "offset": 40}')], finish="tool_calls"), reply("ok")])
+    session = FakeSession()
+    history = [{"role": "user", "content": "Tampilkan semua pengguna"},
+               {"role": "assistant", "content": "[Data used: list_users_page sort=highest risk first showing 1-20 of 55 next_offset=20]\n\n..."}]
+    await make_agent(make_config(monkeypatch), llm, session).ask("lanjut", history=history)
+    assert session.calls[0][1]["offset"] == 20
+
+
+async def test_knowbe4_down_stops_at_once_instead_of_running_into_the_loop_limit(monkeypatch):
+    # the model would retry forever; one failed fetch is enough to answer
+    llm = FakeLLM([reply(calls=[tool_call(str(i), "get_account", '{"console": "main"}')], finish="tool_calls") for i in range(8)])
+
+    class Down(FakeSession):
+        async def call_tool(self, name, arguments):
+            self.calls.append((name, dict(arguments)))
+            return SimpleNamespace(is_error=True, structured_content=None,
+                                   content=[SimpleNamespace(text="KnowBe4 could not be reached (network error or timeout). Try again later.")])
+
+    session = Down()
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("Berapa risk score?")
+    assert answer == msg("kb4_unreachable", "id")
+    assert len(session.calls) == 1
+
+
+async def test_dia_after_a_person_summary_fetches_that_person(monkeypatch):
+    llm = FakeLLM([reply("Saya akan cek."), reply("**Rina punya 3 training Past Due.**")])
+    session = FakeSession({"user_risk_summary": {"user": {"id": 7, "name": "Rina"}, "training_by_status": {"Past Due": 3}}})
+    session.tools.append(SimpleNamespace(name="user_risk_summary", description="d", input_schema={"type": "object"}))
+    history = [{"role": "user", "content": "2"},
+               {"role": "assistant", "content": "[Data used: user_risk_summary Rina (id 7)]\n\n**Risk score Rina 47,09.**"}]
+    await make_agent(make_config(monkeypatch), llm, session).ask("dia ada training yg telat ga?", history=history)
+    assert session.calls == [("user_risk_summary", {"console": "main", "user_id": 7})]

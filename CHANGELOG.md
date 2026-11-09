@@ -52,6 +52,12 @@ All notable changes to this project are listed here. Dates are in YYYY-MM-DD for
 - The "Pertanyaan berikutnya / Next question" suggestion at the end of answers is gone.
 
 ### Fixed
+- Questions without a period no longer pull data from the beginning of the account: over-time data (risk trends, phishing tests, training campaigns, charts, exports) covers the past 12 months unless the question says otherwise.
+- Answers no longer vanish and reappear: the page shows progress until the answer is final, then the whole answer with its chart at once. Queued questions were checked live and are sent exactly once.
+- Guidance questions ("bagaimana cara mengukur efektivitas training?") use the NIST library without having to mention NIST.
+- "lanjut" always continues from the right page (the model once skipped users 21-40); a follow-up about "dia" asking about training, phishing or risk fetches that same person; when KnowBe4 cannot be reached the answer comes at once instead of after eight retries.
+- Images the model writes itself (a broken "Detail tes phishing" image) are removed from every answer; only charts made in code are shown.
+- Phishing-test and training charts use horizontal bars, so long names no longer overlap; chart titles no longer get cut off and show the period on their own line in the chat's language.
 - Chart and CSV links now really expire after an hour: before, files were only removed when a newer one was made, so on a quiet server they stayed downloadable. Old files are also cleared when the web app starts.
 - Date arguments are checked (YYYY-MM-DD, start before end): a loose date such as "Jan 2026" filtered silently wrong.
 - An answer claimed "all 55 users are Low" while three were Medium; the organisation headline now states the users per level.

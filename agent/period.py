@@ -174,3 +174,9 @@ def parse_period(question: str, today: date | None = None) -> Period | None:
         span = _span(m[1], today)
         return Period(span[0], _open_end(span[1], today))
     return None
+
+
+def default_period(today: date | None = None) -> Period:
+    """what a question without a period covers: the past 12 months"""
+    today = today or date.today()
+    return Period(_add_months(today, -12), None)

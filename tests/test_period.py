@@ -73,3 +73,10 @@ def test_period_args_and_label():
     p = parse_period("dari maret sampe juni 2026", TODAY)
     assert p.args() == {"start_date": "2026-03-01", "end_date": "2026-06-30"}
     assert parse_period("dari 2026", TODAY).label() == "2026-01-01 – today"
+
+
+def test_default_period_is_the_past_twelve_months():
+    from agent.period import default_period
+
+    assert default_period(TODAY).args() == {"start_date": "2025-11-06"}
+    assert default_period(date(2024, 2, 29)).start == date(2023, 2, 28)  # from a leap day

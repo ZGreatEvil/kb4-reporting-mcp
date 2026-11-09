@@ -103,6 +103,22 @@ def _short(text: Any, width: int = 28) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
+def _bar_label(name: Any, when: Any) -> str:
+    return f"{_short(name, 34)}  ·  {_date(when)}" if _date(when) else _short(name, 34)
+
+
+def _hbars(fig: Any, ax: Any, labels: list[str], values: list[float], fmt: str, xlabel: str, top: float | None = None) -> None:
+    """long test and campaign names overlapped under vertical bars; horizontal bars give every name its own line"""
+    fig.set_size_inches(8, max(3.2, 0.42 * len(labels) + 1.6))
+    ax.barh(range(len(labels)), values, color=ACCENT)
+    ax.set_yticks(range(len(labels)), labels, fontsize=8)
+    limit = max([top or 0, *values, 1])
+    ax.set_xlim(0, limit * 1.15)
+    for i, v in enumerate(values):
+        ax.text(v + limit * 0.01, i, fmt.format(v), va="center", fontsize=8)
+    ax.set_xlabel(xlabel)
+
+
 def _save(fig: Any) -> str:
     path, url = _new_file(CHART_DIR, ".png")
     fig.tight_layout()
@@ -190,13 +206,8 @@ async def make_chart(
             tests = sorted((x for x in await kb.list_phishing_security_tests(console) if _within(x.get("started_at"), start_date, end_date)),
                            key=lambda x: str(x.get("started_at") or ""), reverse=True)[:limit]
             tests = tests[::-1]
-            labels = [f"{_short(x.get('name'), 18)}\n{_date(x.get('started_at'))}" for x in tests]
             values = [_test_percent(x.get("phish_prone_percentage")) or 0 for x in tests]
-            ax.bar(labels, values, color=ACCENT)
-            for i, v in enumerate(values):
-                ax.text(i, v, f"{v:.1f}%", ha="center", va="bottom", fontsize=8)
-            ax.set_ylabel(t["percent"])
-            ax.tick_params(axis="x", labelsize=7)
+            _hbars(fig, ax, [_bar_label(x.get("name"), x.get("started_at")) for x in tests], values, "{:.1f}%", t["percent"])
             title = t["phishing_tests"]
             summary = {"tests": [{"name": x.get("name"), "started_at": _date(x.get("started_at")), "phish_prone_percent": v} for x, v in zip(tests, values, strict=True)]}
 
@@ -216,23 +227,21 @@ async def make_chart(
             campaigns = sorted((c for c in await kb.list_training_campaigns(console) if _within(c.get("start_date"), start_date, end_date)),
                                key=lambda c: str(c.get("start_date") or ""), reverse=True)[:limit]
             campaigns = campaigns[::-1]
-            labels = [f"{_short(c.get('name'), 18)}\n{_date(c.get('start_date'))}" for c in campaigns]
             values = [c.get("completion_percentage") if isinstance(c.get("completion_percentage"), (int, float)) else 0 for c in campaigns]
-            ax.bar(labels, values, color=ACCENT)
-            for i, v in enumerate(values):
-                ax.text(i, v, f"{v:.0f}%", ha="center", va="bottom", fontsize=8)
-            ax.set_ylim(0, 105)
-            ax.set_ylabel(t["percent"])
-            ax.tick_params(axis="x", labelsize=7)
+            _hbars(fig, ax, [_bar_label(c.get("name"), c.get("start_date")) for c in campaigns], values, "{:.0f}%", t["percent"], top=100)
             title = t["training_completion"]
             summary = {"campaigns": [{"name": c.get("name"), "start_date": _date(c.get("start_date")), "completion_percentage": v} for c, v in zip(campaigns, values, strict=True)]}
 
         if not ax.has_data():
             return {"error": True, "message": t["no_data"]}
         period = _period_label(start_date, end_date) if chart in PERIOD_CHARTS else None
+        # room above the plot for the period line under the title
+        ax.set_title(title, fontsize=11, fontweight="bold", loc="left", pad=20 if period else 6)
         if period:
-            title = f"{title} ({period.replace('the start of the data', '…').replace('today', t['today'])})"
-        ax.set_title(title, fontsize=11, fontweight="bold")
+            # its own line, in the chart's language: one long title line was cut off on the right
+            ax.text(0, 1.01, f"{(start_date or '…')[:10]} – {(end_date or '')[:10] or t['today']}",
+                    transform=ax.transAxes, fontsize=9, color="#555555", va="bottom")
+            title = f"{title} ({(start_date or '…')[:10]} – {(end_date or '')[:10] or t['today']})"
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
         url = _save(fig)

@@ -14,7 +14,7 @@ from mcp.client.streamable_http import streamable_http_client
 from agent.llm import LLMClient
 from agent.messages import DEFAULT_LANGUAGE, LANGUAGE_NAMES, msg
 from agent.normalise import normalise
-from agent.period import parse_period
+from agent.period import default_period, parse_period
 from config.settings import AppConfig, load_config
 
 SYSTEM_PROMPT_TEMPLATE = """
@@ -64,14 +64,16 @@ Rules:
     attached to your answer automatically: never write image links. Explain what it shows from its summary.
 17. Files: when asked to export, download, unduh, CSV or Excel, call export_csv. The download link is attached
     automatically: never write it. Say what the file contains and how many rows it has.
-18. NIST: for best practice, frameworks, "menurut NIST", how to run an awareness or training programme, or how
-    hard a phishing email is to spot, call search_nist with English keywords. Answer only from the passages it
+18. NIST guidance: for best practice, frameworks, how to run, measure or improve an awareness or training
+    programme, how to reduce phishing clicks or risk, or how hard a phishing email is to spot, call search_nist with
+    English keywords, even when the question does not mention NIST. Answer only from the passages it
     returns and cite them like (NIST SP 800-50r1, PDF page 69). When the question is also about our own data,
     combine it with the KnowBe4 tools.
 19. Questions that are not about KnowBe4, security awareness or phishing (news, politics, general knowledge):
     say in one sentence that you only answer questions about this KnowBe4 data and security awareness. No numbers.
 20. Periods ("dari 2026", "tahun lalu", "3 bulan terakhir"): the tools get the period automatically and their results
-    say which period they cover. Say that period in your first line. Never mix in data from outside it.
+    say which period they cover. Without a period in the question they cover the past 12 months. Say the period in
+    your first line. Never mix in data from outside it.
 
 How to answer:
 - First line: a one-sentence direct answer in bold. Never answer with questions back, never say "it depends".
@@ -273,6 +275,8 @@ def _wrong_language(answer: str, language: str) -> bool:
 
 
 MODEL_LINK = re.compile(r"!?\[[^\]]*\]\((?:/static/|/exports/|https?://)[^)]*\)")
+# any image the model writes is made up (it once drew a broken "Detail tes phishing" image); only code adds images
+MODEL_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 
 
 def _with_attachments(answer: str, made: list[dict[str, Any]], language: str) -> str:
@@ -304,11 +308,25 @@ FUTURE_ASK = re.compile(
 REPORT_ASK = re.compile(r"\b(report(?:ed|s|nya)?|report rate|(?:me)?lapor(?:kan|kannya|nya)?|dilaporkan)\b", re.I)
 PHISHING_TOPIC = re.compile(r"phish|phising|email palsu|simulasi", re.I)
 NIST_ASK = re.compile(r"\b(nist|phish\s*scale|csf|800-50|framework|kerangka|best practice|praktik terbaik|menurut standar)\b", re.I)
+# guidance questions use the NIST library even when nobody says "NIST": how to run, measure or improve awareness
+GUIDANCE_ASK = re.compile(
+    r"\b(bagaimana cara|gimana cara|cara (?:mengukur|meningkatkan|menurunkan|mengurangi|membuat|menjalankan|melatih|mencegah)"
+    r"|how (?:to|do|can|should)|tips|saran|rekomendasi|recommend\w*|sebaiknya|apa yang (?:harus|perlu)|langkah|strategi\w*|strateg(?:y|ies)"
+    r"|improve|meningkatkan|tingkatkan|menurunkan|mengurangi|reduce|efektivitas|efektif|effective\w*|mengukur|measure\w*|metrik|metrics?"
+    r"|kenapa penting|why (?:is|does) .{0,20}matter)\b",
+    re.I,
+)
+AWARENESS_TOPIC = re.compile(
+    r"\b(training|pelatihan|awareness|kesadaran|phishing|simulasi|simulation|program|karyawan|employees?|staff|keamanan|security|risiko|risk|klik|click)\w*",
+    re.I,
+)
 # tools that take start_date / end_date; the question's period is put into their arguments
 PERIOD_TOOLS = {
     "phishing_campaign_summary", "repeat_phishing_failures", "phishing_test_detail", "training_completion_summary",
     "overdue_training", "account_risk_overview", "user_risk_summary", "make_chart", "export_csv",
 }
+# current status, not something that happened in a period: the default year is not applied
+NO_DEFAULT_PERIOD = {"overdue_training"}
 # the chart attached when an answer used one of these tools and has none yet (first match wins)
 CHART_FOR_TOOL = (
     ("risk_by_group", "groups"),
@@ -326,7 +344,7 @@ NOT_A_LIST = re.compile(r"\b(export\w*|ekspor\w*|csv|excel|unduh|download|grafik
 # "tampilkan semua user", "list all users", "daftar pengguna"
 LIST_ALL = re.compile(r"\b(semua|all|daftar|list)\b[^.?!]{0,20}\b(users?|pengguna)\b|\b(users?|pengguna)\b[^.?!]{0,10}\b(semua|all)\b", re.I)
 # questions about one person's risk or history (not "hapus user ...")
-PERSON_DETAIL_ASK = re.compile(r"histor|riwayat|risk|risiko|skor|score|detail", re.I)
+PERSON_DETAIL_ASK = re.compile(r"histor|riwayat|risk|risiko|skor|score|detail|training|pelatihan|telat|terlambat|overdue|past due|phish|klik|click", re.I)
 NOTE_LINE = re.compile(r"^\s*\[Data used:[^\]]*\]\s*$", re.M)
 NEXT_OFFSET = re.compile(r"list_users_page [^;\]]*?next_offset=(\d+)")
 # "lanjut", "next", "show 20", "berikutnya": continue the last users page
@@ -467,7 +485,8 @@ class Agent:
             if state.get("range"):
                 start, end = state["range"]
                 args["offset"], args["limit"] = start - 1, min(end - start + 1, 20)
-            elif state.get("continue_from") is not None and not args.get("offset"):
+            elif state.get("continue_from") is not None:
+                # the notes know the next page; the model once sent 40 instead of 20 and skipped one
                 args["offset"] = state["continue_from"]
         if name == "make_chart":
             # labels follow the chat language, whatever the model passed
@@ -475,7 +494,8 @@ class Agent:
         # files and charts only when this question asks for one: it once attached the previous turn's csv to a forecast answer
         if name == "export_csv" and not EXPORT_ASK.search(state.get("prompt", "")):
             return _error("This question does not ask for a file. Do not export; answer the question. Do not mention this rule to the user.")
-        if state.get("period") and name in PERIOD_TOOLS:
+        # a training enrolment from 2024 that is still unfinished is still overdue: no default year there
+        if state.get("period") and name in PERIOD_TOOLS and not (state.get("default_period") and name in NO_DEFAULT_PERIOD):
             # the question's period wins over whatever dates the model sent (it left them out or guessed)
             args.pop("start_date", None)
             args.pop("end_date", None)
@@ -621,7 +641,11 @@ class Agent:
             # "dari 2026", "3 bulan terakhir": worked out here and given to every tool that can filter by date
             if period := parse_period(prompt):
                 state["period"] = period
-                print(f"[AGENT] Period: {period.label()}", flush=True)
+            else:
+                # no period asked: the past year, not everything since the account began (charts started in 2024)
+                state["period"] = default_period()
+                state["default_period"] = True
+            print(f"[AGENT] Period: {state['period'].label()}{' (default)' if state.get('default_period') else ''}", flush=True)
             earlier_notes =" ".join(m["content"] for m in (history or []) if isinstance(m, dict) and m.get("role") == "assistant")
             offsets = NEXT_OFFSET.findall(earlier_notes)
             if offsets and CONTINUE.search(prompt):
@@ -702,7 +726,7 @@ class Agent:
                                 call = ("make_chart", {"console": console, "chart": "risk_trend", "user_id": person})
                         elif EXPORT_ASK.search(prompt) and not state.get("export_csv"):
                             exact = msg("call_export", language)
-                        elif NIST_ASK.search(prompt) and not state.get("search_nist"):
+                        elif (NIST_ASK.search(prompt) or (GUIDANCE_ASK.search(prompt) and AWARENESS_TOPIC.search(prompt))) and not state.get("search_nist"):
                             # it answered a phish scale question from general knowledge, with no source
                             exact = msg("call_nist", language)
                         elif (REPORT_ASK.search(prompt) and not state.get("phishing_test_detail")
@@ -710,9 +734,11 @@ class Agent:
                             # "terus yg report brp?" once got the previous answer repeated; only this tool knows who reported
                             exact = msg("call_report", language)
                             call = ("phishing_test_detail", {"console": console})
-                        elif state.get("single_match_id") and not state.get("user_risk_summary") and (state.get("picked") or PERSON_DETAIL_ASK.search(prompt)):
-                            exact = msg("call_user_summary", language, id=state["single_match_id"])
-                            call = ("user_risk_summary", {"console": console, "user_id": state["single_match_id"]})
+                        elif (person := state.get("single_match_id") or (state.get("last_person_id") if PRONOUN.search(prompt) else None)) \
+                                and not state.get("user_risk_summary") and (state.get("picked") or PERSON_DETAIL_ASK.search(prompt)):
+                            # "dia ada training yg telat?" once got a users list instead of that person
+                            exact = msg("call_user_summary", language, id=person)
+                            call = ("user_risk_summary", {"console": console, "user_id": person})
                         if exact:
                             exact_forced = True
                             if streamed:
@@ -785,7 +811,7 @@ class Agent:
                         messages.append({"role": "assistant", "content": answer})
                         messages.append({"role": "user", "content": msg("rewrite_language", language)})
                         continue
-                    if (state.get("period") and state.get("kb4_data")
+                    if (state.get("period") and not state.get("default_period") and state.get("kb4_data")
                             and not any(state.get(t) for t in PERIOD_TOOLS - {"make_chart", "export_csv"})):
                         # only today's state was used (rankings, groups): say the period could not apply
                         answer = f"{answer}\n\n*{msg('period_current_only', language, period=state['period'].label())}*"
@@ -820,6 +846,7 @@ class Agent:
                         call_id = f"agent_chart_{loop}"
                         synthetic = SimpleNamespace(id=call_id, function=SimpleNamespace(name="make_chart", arguments=json.dumps(chart)))
                         await self._run_tool(session, synthetic, tool_names, state)
+                    answer = re.sub(r"\n{3,}", "\n\n", MODEL_LINK.sub("", MODEL_IMAGE.sub("", answer))).strip()
                     if state.get("attachments"):
                         answer = _with_attachments(answer, state["attachments"], language)
                     answer = answer.strip() or msg("no_answer", language)
@@ -849,5 +876,10 @@ class Agent:
                     yield {"type": "tool", "name": call.function.name}
                     content = await self._run_tool(session, call, tool_names, state)
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
+                if state.get("kb4_failure") and not state.get("kb4_data"):
+                    # the client already retried; asking again only ran into the loop limit
+                    print("[AGENT] KnowBe4 failed and nothing was fetched, answering with the fixed message", flush=True)
+                    yield {"type": "done", "answer": msg(state["kb4_failure"], language), "note": ""}
+                    return
 
         yield {"type": "done", "answer": msg("loop_limit", language, loops=max_loops)}
