@@ -7,6 +7,7 @@ import pytest
 
 from agent.agent import Agent
 from agent.llm import LLMClient, LLMError
+from agent.messages import msg
 from config.settings import AppConfig, ConsoleConfig
 
 
@@ -66,14 +67,14 @@ async def collect(agent, prompt="q", language="id"):
 
 
 async def test_text_streams_then_done(monkeypatch):
-    llm = FakeStreamLLM([[("content", "Risk "), ("content", "39.4"), ("end", end("Risk 39.4"))]])
+    llm = FakeStreamLLM([[("content", "Halo, "), ("content", "apa kabar"), ("end", end("Halo, apa kabar"))]])
     agent, _ = make_agent(make_config(monkeypatch), llm)
     events = await collect(agent)
     assert events == [
         {"type": "thinking"},
-        {"type": "delta", "text": "Risk "},
-        {"type": "delta", "text": "39.4"},
-        {"type": "done", "answer": "Risk 39.4"},
+        {"type": "delta", "text": "Halo, "},
+        {"type": "delta", "text": "apa kabar"},
+        {"type": "done", "answer": "Halo, apa kabar", "note": ""},
     ]
 
 
@@ -103,7 +104,7 @@ async def test_empty_answer_nudged_in_stream(monkeypatch):
     llm = FakeStreamLLM([[("end", end(""))], [("content", "Now"), ("end", end("Now"))]])
     agent, _ = make_agent(make_config(monkeypatch), llm)
     events = await collect(agent)
-    assert events[-1] == {"type": "done", "answer": "Now"}
+    assert events[-1]["type"] == "done" and events[-1]["answer"] == "Now"
 
 
 async def test_loop_limit_in_stream(monkeypatch):
@@ -195,9 +196,10 @@ async def test_chat_stream_failure_mid_stream_becomes_llm_error(monkeypatch):
 @pytest.fixture
 def stream_client(monkeypatch):
     from fastapi.testclient import TestClient
+
     import web.main as web_main
 
-    async def fake_stream(message, language="id"):
+    async def fake_stream(message, language="id", history=None):
         if message == "boom":
             raise LLMError("llm_model_missing", model="m")
             yield  # pragma: no cover
@@ -222,8 +224,40 @@ def test_stream_endpoint_sends_ndjson(stream_client):
 
 def test_stream_endpoint_translates_errors(stream_client):
     r = stream_client.post("/api/chat/stream", json={"message": "boom", "language": "en"})
-    assert lines(r) == [{"type": "error", "message": "Model 'm' is not available on the LLM server. Run: ollama pull m"}]
+    assert lines(r) == [{"type": "error", "message": msg("llm_model_missing", "en", model="m")}]
 
 
 def test_stream_endpoint_rejects_bad_language(stream_client):
     assert stream_client.post("/api/chat/stream", json={"message": "q", "language": "de"}).status_code == 422
+
+
+async def test_chinese_slip_in_stream_is_reset_and_rewritten(monkeypatch):
+    llm = FakeStreamLLM([
+        [("content", "x 中文"), ("end", end("x 中文"))],
+        [("content", "clean"), ("end", end("clean"))],
+    ])
+    agent, _ = make_agent(make_config(monkeypatch), llm)
+    types = [e["type"] for e in await collect(agent)]
+    assert types == ["thinking", "delta", "reset", "thinking", "delta", "done"]
+
+
+async def test_presence_penalty_is_sent(monkeypatch):
+    client = LLMClient(make_config(monkeypatch, llm_presence_penalty=0.0, llm_temperature=0.6))
+    kwargs = client._kwargs([], [])
+    assert kwargs["presence_penalty"] == 0.0 and kwargs["temperature"] == 0.6
+
+
+
+async def test_numbers_without_tool_are_reset_in_stream(monkeypatch):
+    llm = FakeStreamLLM([
+        [("content", "User 1-20 semua 75.1"), ("end", end("User 1-20 semua 75.1"))],
+        [("end", end(calls=[call("c1")], finish="tool_calls"))],
+        [("content", "Skor 39.4"), ("end", end("Skor 39.4"))],
+    ])
+    agent, session = make_agent(make_config(monkeypatch), llm)
+    events = await collect(agent, "siapa user paling berisiko?")
+    types = [e["type"] for e in events]
+    assert types[:3] == ["thinking", "delta", "reset"]
+    assert session.calls == ["get_account"]
+    assert events[-1]["answer"] == "Skor 39.4"
+    assert "get_account" in events[-1]["note"]

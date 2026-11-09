@@ -8,18 +8,21 @@ One-time setup
                           setx OLLAMA_FLASH_ATTENTION 1
                           setx OLLAMA_KV_CACHE_TYPE q8_0
                           then quit Ollama from the tray and start it again
+   Chat model:            ollama create kb4-analyst -f ollama\Modelfile   (32k context built in)
 5. Python environment:    py -3.12 -m venv .venv
                           .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 6. Settings:              Copy-Item .env.example .env
                           Copy-Item config\consoles.example.yaml config\consoles.yaml
                           add your consoles to consoles.yaml and their Reporting API keys to .env
 7. Check the keys:        .\.venv\Scripts\python.exe test_knowbe4.py
-8. Check the model:       ollama run qwen3.5:4b --think=false "Reply with just the word OK."
+8. Check the model:       ollama run kb4-analyst --think=false "Reply with just the word OK."
                           ollama ps   (should say 100% GPU and 32768)
    After installing or updating Ollama, quit it from the tray and start it from the Start menu, then check ollama ps again.
+9. NIST library:          .\.venv\Scripts\python.exe -m kb4_mcp.knowledge
 
 Every time
 1. Make sure Ollama is running (tray icon, or: ollama ps)
 2. Terminal 1:            .\.venv\Scripts\python.exe run_mcp.py
 3. Terminal 2:            .\.venv\Scripts\python.exe run_web.py
 4. Open                   http://127.0.0.1:8080
+   Demo script:           docs\DEMO.md

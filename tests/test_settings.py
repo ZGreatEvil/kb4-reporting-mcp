@@ -50,7 +50,7 @@ def test_has_api_key(monkeypatch, value, expected):
 def test_missing_key_raises(monkeypatch):
     monkeypatch.delenv("KB4_TEST_KEY", raising=False)
     with pytest.raises(RuntimeError):
-        ConsoleConfig(display_name="X", api_key_env="KB4_TEST_KEY").api_key
+        _ = ConsoleConfig(display_name="X", api_key_env="KB4_TEST_KEY").api_key
 
 
 def test_prompt_lists_consoles_from_config(monkeypatch):
@@ -75,3 +75,49 @@ def test_prompt_with_no_keys(monkeypatch):
     monkeypatch.delenv("KB4_B_KEY", raising=False)
     cfg = AppConfig(consoles={"b": ConsoleConfig(display_name="Beta", api_key_env="KB4_B_KEY")})
     assert "No console has an API key" in build_system_prompt(cfg)
+
+
+@pytest.mark.parametrize("name,value,expected", [
+    ("KB4_RATE_LIMIT_RPS", "abc", "KB4_RATE_LIMIT_RPS='abc' in .env must be a number"),
+    ("WEB_PORT", "eighty", "WEB_PORT='eighty' in .env must be a whole number"),
+    ("KB4_RATE_LIMIT_RPS", "0", "KB4_RATE_LIMIT_RPS in .env"),
+    ("KB4_RATE_LIMIT_RPS", "5", "KB4_RATE_LIMIT_RPS in .env"),
+    ("LLM_MAX_TOOL_LOOPS", "0", "LLM_MAX_TOOL_LOOPS in .env"),
+    ("WEB_PORT", "70000", "WEB_PORT in .env"),
+    ("KB4_CACHE_SECONDS", "-5", "KB4_CACHE_SECONDS in .env"),
+    ("KB4_MAX_RECORDS_PER_TOOL", "0", "KB4_MAX_RECORDS_PER_TOOL in .env"),
+    ("KB4_PER_PAGE", "501", "KB4_PER_PAGE in .env"),
+    ("LLM_TOP_P", "1.5", "LLM_TOP_P in .env"),
+    ("MCP_PATH", "mcp", "MCP_PATH in .env"),
+    ("KB4_DAILY_LIMIT", "0", "KB4_DAILY_LIMIT in .env"),
+])
+def test_bad_env_values_name_the_setting(monkeypatch, name, value, expected):
+    from config.settings import SettingsError
+
+    monkeypatch.setenv(name, value)
+    with pytest.raises(SettingsError, match=expected.replace(".", r"\.").replace("'", "'")):
+        load_config("config/consoles.example.yaml")
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("consoles: [\n", "not valid YAML (line 2)"),
+    ("- a\n- b\n", "must start with 'consoles:'"),
+    ("consoles:\n  a:\n    display_name: A\n    region: mars\n    api_key_env: K\n", "consoles: a.region"),
+    ("consoles:\n  a:\n    display_name: A\n    base_url: x\n    api_key_env: K\n", "consoles: a.base_url"),
+    ("consoles:\n  a:\n    region: us\n", "consoles: a.display_name"),
+    ("consoles:\n  - a\n", "config/consoles.yaml, consoles: Input should be a valid dictionary"),
+])
+def test_bad_consoles_file_is_explained(tmp_path, text, expected):
+    from config.settings import SettingsError
+
+    f = tmp_path / "consoles.yaml"
+    f.write_text(text, encoding="utf-8")
+    with pytest.raises(SettingsError) as info:
+        load_config(f)
+    assert expected in str(info.value)
+
+
+def test_empty_consoles_file_loads_with_no_consoles(tmp_path):
+    f = tmp_path / "consoles.yaml"
+    f.write_text("", encoding="utf-8")
+    assert load_config(f).consoles == {}

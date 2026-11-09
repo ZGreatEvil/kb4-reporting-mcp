@@ -1,11 +1,11 @@
 import asyncio
 import json
+import sys
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from config.settings import load_config
-
 
 CONFIG = load_config()
 MCP_URL = f"http://{CONFIG.mcp_host}:{CONFIG.mcp_port}{CONFIG.mcp_path}"
@@ -63,4 +63,9 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as exc:  # the sdk wraps connection failures in exception groups
+        print()
+        print(f"Cannot use the MCP server at {MCP_URL} ({type(exc).__name__}). Is it running? Start it with: python run_mcp.py")
+        sys.exit(1)

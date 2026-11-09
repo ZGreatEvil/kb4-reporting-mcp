@@ -1,398 +1,108 @@
 <!doctype html>
-<html lang="en" class="h-full">
+<html lang="id" class="h-full">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#E8EEF9" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0B1220" media="(prefers-color-scheme: dark)" />
   <title>KnowBe4 AI Analyst</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
 
   <!-- built from tailwind.input.css with the tailwind cli; see README, "Changing the styles" -->
   <link rel="stylesheet" href="/static/app.css" />
-  <!-- Marked.js for Markdown rendering, DOMPurify to sanitise model output -->
-  <script src="https://cdn.jsdelivr.net/npm/marked@18.1.1/lib/marked.umd.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.17/dist/purify.min.js"></script>
-  <!-- Lucide Icons -->
-  <script src="https://cdn.jsdelivr.net/npm/lucide@1.61.0/dist/umd/lucide.min.js"></script>
-
+  <!-- served from here (checked against jsdelivr's hashes), so the page works offline and under a strict CSP -->
+  <script src="/static/vendor/marked.umd.js" defer></script>
+  <script src="/static/vendor/purify.min.js" defer></script>
+  <script src="/static/vendor/lucide.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
 </head>
 
-<body class="h-full bg-gradient-to-br from-[#E8EEF9] via-[#F4F6FB] to-[#E3E8F5] text-slate-800 antialiased selection:bg-blue-500 selection:text-white flex items-center justify-center p-3 md:p-6 overflow-hidden">
+<body class="h-full bg-gradient-to-br from-[#E8EEF9] via-[#F4F6FB] to-[#E3E8F5] dark:from-[#0B1220] dark:via-[#0F172A] dark:to-[#111827] text-slate-800 dark:text-slate-100 antialiased selection:bg-blue-500 selection:text-white flex items-center justify-center sm:p-3 md:p-6 overflow-hidden">
 
-  <!-- Ambient Light Orbs (Glow Background) -->
-  <div class="fixed top-[-10%] left-[-5%] w-[450px] h-[450px] rounded-full bg-blue-400/25 blur-[120px] pointer-events-none"></div>
-  <div class="fixed bottom-[-10%] right-[-5%] w-[500px] h-[500px] rounded-full bg-indigo-300/30 blur-[140px] pointer-events-none"></div>
-  <div class="fixed top-[40%] right-[20%] w-[350px] h-[350px] rounded-full bg-sky-200/40 blur-[100px] pointer-events-none"></div>
+  <!-- ambient glow -->
+  <div class="fixed top-[-10%] left-[-5%] w-[450px] h-[450px] rounded-full bg-blue-400/25 dark:bg-blue-500/10 blur-[120px] pointer-events-none" aria-hidden="true"></div>
+  <div class="fixed bottom-[-10%] right-[-5%] w-[500px] h-[500px] rounded-full bg-indigo-300/30 dark:bg-indigo-500/10 blur-[140px] pointer-events-none" aria-hidden="true"></div>
 
-  <!-- Main Glassmorphism Window Container -->
-  <div class="relative w-full max-w-5xl h-[94vh] flex flex-col rounded-3xl bg-white/70 backdrop-blur-2xl border border-white/80 shadow-apple-glass overflow-hidden transition-all">
+  <div class="app-shell relative w-full max-w-5xl flex flex-col sm:rounded-3xl bg-white/70 dark:bg-slate-900/70 backdrop-blur-2xl sm:border border-white/80 dark:border-slate-700/60 shadow-apple-glass overflow-hidden">
 
-    <!-- Top macOS Style Header & Traffic Lights -->
-    <!-- wraps onto two rows on narrow screens instead of squeezing the badge -->
-    <header class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 sm:px-6 py-4 border-b border-white/60 bg-white/30 backdrop-blur-md">
-      <div class="flex items-center gap-3.5">
-        <!-- Traffic light buttons (decorative, hidden on phones) -->
-        <div class="hidden sm:flex items-center gap-2" aria-hidden="true">
-          <span class="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E]/40 inline-block shadow-sm"></span>
-          <span class="w-3 h-3 rounded-full bg-[#FFBD2E] border border-[#DEA123]/40 inline-block shadow-sm"></span>
-          <span class="w-3 h-3 rounded-full bg-[#27C93F] border border-[#1AAB29]/40 inline-block shadow-sm"></span>
+    <!-- wraps onto two rows on narrow screens instead of squeezing -->
+    <header class="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-white/60 dark:border-slate-700/60 bg-white/30 dark:bg-slate-900/30 backdrop-blur-md">
+      <div class="flex items-center gap-2.5 min-w-0">
+        <div class="p-1.5 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white shadow-md shadow-blue-500/20 shrink-0" aria-hidden="true">
+          <i data-lucide="shield-alert" class="w-4 h-4"></i>
         </div>
-        <div class="hidden sm:block h-4 w-[1px] bg-slate-300/60 mx-1" aria-hidden="true"></div>
-        <div class="flex items-center gap-2.5">
-          <div class="p-1.5 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white shadow-md shadow-blue-500/20">
-            <i data-lucide="shield-alert" class="w-4 h-4"></i>
-          </div>
-          <div>
-            <h1 class="text-sm font-bold text-slate-800 tracking-tight flex items-center gap-2 whitespace-nowrap">
-              KnowBe4 AI Analyst
-              <span class="text-[10px] uppercase font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 tracking-wider">Online</span>
-            </h1>
-          </div>
-        </div>
+        <h1 class="text-sm font-bold text-slate-800 dark:text-slate-100 tracking-tight whitespace-nowrap">KnowBe4 AI Analyst</h1>
       </div>
 
-      <div class="flex items-center gap-2">
-        <!-- language switch; the chosen language also goes to the model with each question -->
-        <div id="lang-switch" role="group" aria-label="Bahasa / Language" class="flex items-center rounded-full bg-slate-200/50 border border-white/50 shadow-sm p-0.5 text-xs font-semibold">
-          <button type="button" data-lang="id" aria-pressed="false" class="lang-btn min-h-[32px] min-w-[36px] px-2.5 rounded-full text-slate-500 hover:text-slate-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">ID</button>
-          <button type="button" data-lang="en" aria-pressed="false" class="lang-btn min-h-[32px] min-w-[36px] px-2.5 rounded-full text-slate-500 hover:text-slate-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">EN</button>
-        </div>
-        <span id="consoles-badge" class="text-xs font-medium text-slate-500 bg-slate-200/50 backdrop-blur-sm px-2.5 py-1 rounded-full border border-white/50 shadow-sm flex items-center gap-1.5 whitespace-nowrap" title="Configured consoles">
-          <i data-lucide="database" class="w-3 h-3 text-slate-600 shrink-0" aria-hidden="true"></i>
-          <span id="consoles">KnowBe4</span>
+      <!-- on phones this is its own full-width row: status left, buttons right -->
+      <div class="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto">
+        <!-- live server status and the configured console; polled from /health -->
+        <span id="status" role="status" class="chip" data-state="checking">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-text">…</span>
+          <span class="hidden sm:inline text-slate-400 dark:text-slate-500" aria-hidden="true">·</span>
+          <span id="consoles" class="hidden sm:inline">KnowBe4</span>
         </span>
+
+        <div class="flex items-center gap-2">
+          <button type="button" id="new-chat" class="btn btn-secondary" disabled>
+            <i data-lucide="square-pen" class="w-4 h-4" aria-hidden="true"></i>
+            <span id="new-chat-label" class="hidden sm:inline">Baru</span>
+          </button>
+
+          <!-- language switch; the chosen language also goes to the model with each question -->
+          <div id="lang-switch" role="group" aria-label="Bahasa / Language" class="segmented">
+            <button type="button" data-lang="id" aria-pressed="false" class="lang-btn">ID</button>
+            <button type="button" data-lang="en" aria-pressed="false" class="lang-btn">EN</button>
+          </div>
+        </div>
       </div>
     </header>
 
-    <!-- Chat Messages Stream Area -->
-    <main id="chat" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-5 scroll-smooth">
+    <main id="chat" aria-live="polite" aria-relevant="additions" class="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-6 space-y-5">
+      <noscript><p class="text-sm text-center text-rose-600">JavaScript diperlukan · JavaScript is required.</p></noscript>
+
       <!-- first-visit language picker; hidden once a language is chosen -->
-      <section id="lang-picker" class="hidden mx-auto mt-6 w-full max-w-sm bg-white/85 backdrop-blur-md border border-white/90 rounded-2xl shadow-bubble-ai p-5 text-center" aria-labelledby="lang-picker-title">
-        <h2 id="lang-picker-title" class="text-sm font-semibold text-slate-800">Pilih bahasa · Choose language</h2>
-        <p class="text-xs text-slate-500 mt-1">Bisa diganti kapan saja lewat ID | EN · You can switch any time with ID | EN</p>
+      <section id="lang-picker" class="hidden mx-auto mt-6 w-full max-w-sm bubble-ai p-5 text-center" aria-labelledby="lang-picker-title">
+        <h2 id="lang-picker-title" class="text-sm font-semibold text-slate-800 dark:text-slate-100">Pilih bahasa · Choose language</h2>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Bisa diganti kapan saja lewat ID | EN · You can switch any time with ID | EN</p>
         <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <button type="button" data-lang="id" class="pick-btn min-h-[42px] px-3 rounded-xl bg-white border border-slate-200 text-sm font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700 active:scale-95 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">Bahasa Indonesia</button>
-          <button type="button" data-lang="en" class="pick-btn min-h-[42px] px-3 rounded-xl bg-white border border-slate-200 text-sm font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700 active:scale-95 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">English</button>
+          <button type="button" data-lang="id" class="pick-btn btn btn-secondary w-full">Bahasa Indonesia</button>
+          <button type="button" data-lang="en" class="pick-btn btn btn-secondary w-full">English</button>
         </div>
       </section>
 
-      <!-- Welcome Message from AI -->
-      <div id="welcome" class="hidden flex items-start gap-3.5 max-w-[85%]">
-        <div class="w-8 h-8 rounded-2xl bg-gradient-to-tr from-blue-600 to-sky-400 flex items-center justify-center text-white shadow-md flex-shrink-0 mt-0.5">
-          <i data-lucide="bot" class="w-4 h-4"></i>
-        </div>
-        <div id="welcome-text" class="bg-white/80 backdrop-blur-md border border-white/90 p-4 rounded-2xl rounded-tl-sm text-slate-700 text-sm leading-relaxed shadow-bubble-ai prose-ai"></div>
+      <div id="welcome" class="hidden msg-ai">
+        <div class="avatar" aria-hidden="true"><i data-lucide="bot" class="w-4 h-4"></i></div>
+        <div id="welcome-text" class="bubble-ai p-4 text-sm leading-relaxed prose-ai"></div>
       </div>
     </main>
 
-    <!-- Bottom Action & Input Box Container -->
-    <footer class="p-4 md:p-6 pt-2 bg-gradient-to-t from-white/80 via-white/50 to-transparent backdrop-blur-sm">
-      
-      <!-- Quick Prompt Chips -->
-      <!-- <div class="flex items-center gap-2 overflow-x-auto pb-3 mb-2 no-scrollbar">
-        <span class="text-xs font-medium text-slate-400 flex items-center gap-1 flex-shrink-0 mr-1">
-          <i data-lucide="sparkles" class="w-3.5 h-3.5 text-amber-500"></i> Suggestions:
-        </span>
-        <button class="example whitespace-nowrap text-xs font-medium bg-white/70 hover:bg-white/95 text-slate-600 hover:text-blue-600 border border-white/80 hover:border-blue-200 px-3.5 py-1.5 rounded-xl shadow-sm transition-all duration-150 backdrop-blur-md active:scale-95">
-          Compare the current risk score of all consoles.
-        </button>
-        <button class="example whitespace-nowrap text-xs font-medium bg-white/70 hover:bg-white/95 text-slate-600 hover:text-blue-600 border border-white/80 hover:border-blue-200 px-3.5 py-1.5 rounded-xl shadow-sm transition-all duration-150 backdrop-blur-md active:scale-95">
-          Show the latest training campaign.
-        </button>
-        <button class="example whitespace-nowrap text-xs font-medium bg-white/70 hover:bg-white/95 text-slate-600 hover:text-blue-600 border border-white/80 hover:border-blue-200 px-3.5 py-1.5 rounded-xl shadow-sm transition-all duration-150 backdrop-blur-md active:scale-95">
-          Find the 10 highest-risk active users.
-        </button>
-      </div> -->
-
-      <!-- Glass Input Form -->
-      <form id="form" class="relative flex items-center bg-white/85 backdrop-blur-xl border border-white rounded-2xl shadow-lg p-1.5 focus-within:ring-2 focus-within:ring-blue-500/30 focus-within:border-blue-500/50 transition-all">
-        <textarea 
-          id="message" 
-          rows="1" 
-          placeholder="Ask about KnowBe4 reports…"
-          aria-label="Your question"
-          class="w-full bg-transparent border-0 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-0 px-3.5 py-2.5 resize-none max-h-32 min-h-[42px]"
+    <footer class="px-3 sm:px-6 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:pb-4 bg-gradient-to-t from-white/80 via-white/50 to-transparent dark:from-slate-900/80 dark:via-slate-900/50 backdrop-blur-sm">
+      <form id="form" class="flex items-end gap-1.5 bg-white/85 dark:bg-slate-800/85 backdrop-blur-xl border border-white dark:border-slate-700 rounded-2xl shadow-lg p-1.5 focus-within:ring-2 focus-within:ring-blue-500/40 focus-within:border-blue-500/50 transition-shadow">
+        <textarea
+          id="message"
+          rows="1"
+          maxlength="4000"
+          placeholder="Tanya laporan KnowBe4…"
+          aria-label="Pertanyaan Anda"
+          aria-describedby="counter"
+          class="flex-1 min-w-0 bg-transparent border-0 text-base sm:text-sm text-slate-800 dark:text-slate-100 placeholder-slate-500 dark:placeholder-slate-400 focus:outline-none focus:ring-0 px-3 py-2.5 resize-none overflow-y-hidden max-h-32 h-11 min-h-[44px] leading-6"
         ></textarea>
-        
-        <button 
-          id="send" 
-          type="submit" 
-          aria-label="Send message"
-          class="min-h-[42px] flex items-center justify-center gap-1.5 bg-[#0071E3] hover:bg-[#0077ED] active:scale-95 text-white font-medium text-xs px-4 py-2.5 rounded-xl shadow-md shadow-blue-500/25 transition-all duration-200 disabled:opacity-40 disabled:pointer-events-none flex-shrink-0"
-        >
-          <span id="send-label">Send</span>
-          <i data-lucide="arrow-up" class="w-3.5 h-3.5"></i>
+
+        <button id="send" type="submit" aria-label="Kirim pertanyaan" class="btn btn-primary">
+          <!-- icon only on phones, so the question box keeps room for its placeholder -->
+          <span id="send-label" class="hidden sm:inline">Kirim</span>
+          <i data-lucide="arrow-up" class="w-4 h-4" aria-hidden="true"></i>
         </button>
       </form>
-      
-      <div class="text-[11px] text-center text-slate-400 mt-2">
-        KnowBe4 Chatbot
+
+      <div class="flex items-center justify-between gap-2 mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+        <span id="footnote" class="flex-1 text-center">Model AI lokal · data KnowBe4 tidak keluar dari komputer ini</span>
+        <span id="counter" class="hidden tabular-nums" aria-live="polite"></span>
       </div>
     </footer>
-
   </div>
-
-  <script>
-    lucide.createIcons();
-
-    // console ids come from config via /health, so no company names live in this file
-    fetch('/health')
-      .then(r => r.json())
-      .then(h => {
-        if (h.consoles && h.consoles.length) {
-          document.querySelector('#consoles').textContent = h.consoles.map(c => c.toUpperCase()).join(' · ');
-        }
-      })
-      .catch(() => {});
-
-    // give up only when nothing has arrived for this long; a long answer that keeps streaming is fine
-    const CHAT_IDLE_TIMEOUT_MS = 180000;
-
-    // model output is untrusted html once rendered
-    const renderMarkdown = (text) => DOMPurify.sanitize(marked.parse(text));
-
-    const chat = document.querySelector('#chat');
-    const form = document.querySelector('#form');
-    const input = document.querySelector('#message');
-    const send = document.querySelector('#send');
-
-    // every piece of page text, per language; server messages come back already translated
-    const STRINGS = {
-      id: {
-        welcome: 'Siap. Tanyakan tentang risk score, kampanye phishing, user, grup, training, enrollment, policy, atau perbandingan antar konsol.',
-        placeholder: 'Tanya laporan KnowBe4…',
-        inputLabel: 'Pertanyaan Anda',
-        send: 'Kirim',
-        sendLabel: 'Kirim pertanyaan',
-        consoles: 'Konsol yang dikonfigurasi',
-        loading: (s) => `Menganalisis data KnowBe4… (${s} dtk)`,
-        thinking: (s) => `Berpikir… (${s} dtk)`,
-        tool: (name, s) => `Mengambil data: ${name}… (${s} dtk)`,
-        noAnswer: 'Tidak ada respons yang diterima.',
-        timeout: (s) => `Tidak ada respons selama ${s} detik. Coba pertanyaan yang lebih sempit.`,
-        error: (m) => `Error: ${m}`,
-      },
-      en: {
-        welcome: 'Ready. Ask about risk scores, phishing campaigns, users, groups, training, enrolments, policies or comparisons across consoles.',
-        placeholder: 'Ask about KnowBe4 reports…',
-        inputLabel: 'Your question',
-        send: 'Send',
-        sendLabel: 'Send question',
-        consoles: 'Configured consoles',
-        loading: (s) => `Analysing KnowBe4 data… (${s} s)`,
-        thinking: (s) => `Thinking… (${s} s)`,
-        tool: (name, s) => `Fetching data: ${name}… (${s} s)`,
-        noAnswer: 'No response received.',
-        timeout: (s) => `No response for ${s} seconds. Try a narrower question.`,
-        error: (m) => `Error: ${m}`,
-      },
-    };
-    const LANG_KEY = 'kb4-chat-language';
-    const picker = document.querySelector('#lang-picker');
-    const welcome = document.querySelector('#welcome');
-    let lang = null;
-    let busy = false;
-
-    // storage can be blocked (private windows, strict settings); the picker then just shows again
-    function savedLang() {
-      try {
-        const v = localStorage.getItem(LANG_KEY);
-        return v === 'id' || v === 'en' ? v : null;
-      } catch { return null; }
-    }
-
-    function applyLang(l) {
-      lang = l;
-      try { localStorage.setItem(LANG_KEY, l); } catch {}
-      const t = STRINGS[l];
-      document.documentElement.lang = l;
-      document.querySelector('#welcome-text').textContent = t.welcome;
-      input.placeholder = t.placeholder;
-      input.setAttribute('aria-label', t.inputLabel);
-      document.querySelector('#send-label').textContent = t.send;
-      send.setAttribute('aria-label', t.sendLabel);
-      document.querySelector('#consoles-badge').title = t.consoles;
-      document.querySelectorAll('.lang-btn').forEach((b) => {
-        const on = b.dataset.lang === l;
-        b.setAttribute('aria-pressed', String(on));
-        b.classList.toggle('bg-white', on);
-        b.classList.toggle('text-blue-700', on);
-        b.classList.toggle('shadow-sm', on);
-        b.classList.toggle('text-slate-500', !on);
-      });
-      picker.classList.add('hidden');
-      welcome.classList.remove('hidden');
-      input.disabled = false;
-      send.disabled = busy;
-    }
-
-    document.querySelectorAll('.lang-btn, .pick-btn').forEach((b) => {
-      b.addEventListener('click', () => {
-        const fromPicker = b.classList.contains('pick-btn');
-        applyLang(b.dataset.lang);
-        if (fromPicker) input.focus();
-      });
-    });
-
-    const initial = savedLang();
-    if (initial) {
-      applyLang(initial);
-    } else {
-      picker.classList.remove('hidden');
-      // neutral until a language is picked
-      input.placeholder = 'Pilih bahasa · Choose language';
-      input.disabled = true;
-      send.disabled = true;
-      document.querySelector('#send-label').textContent = '…';
-    }
-
-    // Auto-expand textarea
-    input.addEventListener('input', function () {
-      this.style.height = 'auto';
-      this.style.height = (this.scrollHeight) + 'px';
-      if(this.value === '') this.style.height = '42px';
-    });
-
-    // Enter to submit (Shift+Enter for new line)
-    input.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        form.requestSubmit();
-      }
-    });
-
-    function add(content, cls, isMarkdown = false) {
-      const isUser = cls === 'user';
-      const wrapper = document.createElement('div');
-      wrapper.className = `flex items-start gap-3.5 ${isUser ? 'justify-end' : 'max-w-[88%]'}`;
-
-      let avatarHtml = '';
-      if (!isUser) {
-        avatarHtml = `
-          <div class="w-8 h-8 rounded-2xl bg-gradient-to-tr from-blue-600 to-sky-400 flex items-center justify-center text-white shadow-md flex-shrink-0 mt-0.5">
-            <i data-lucide="bot" class="w-4 h-4"></i>
-          </div>
-        `;
-      }
-
-      const bubble = document.createElement('div');
-      if (isUser) {
-        bubble.className = "bg-[#0071E3] text-white p-3.5 px-4 rounded-2xl rounded-tr-sm text-sm leading-relaxed shadow-bubble-user max-w-[80%]";
-        bubble.textContent = content;
-      } else {
-        bubble.className = "bg-white/85 backdrop-blur-md border border-white/90 p-4 rounded-2xl rounded-tl-sm text-slate-700 text-sm leading-relaxed shadow-bubble-ai prose-ai w-full overflow-hidden";
-        if (isMarkdown) {
-          bubble.innerHTML = renderMarkdown(content);
-        } else {
-          bubble.textContent = content;
-        }
-      }
-
-      if (isUser) {
-        wrapper.appendChild(bubble);
-      } else {
-        wrapper.innerHTML = avatarHtml;
-        wrapper.appendChild(bubble);
-      }
-
-      chat.appendChild(wrapper);
-      lucide.createIcons();
-      chat.scrollTop = chat.scrollHeight;
-      return bubble;
-    }
-
-    document.querySelectorAll('.example').forEach(btn => {
-      btn.onclick = () => {
-        input.value = btn.textContent.trim();
-        input.focus();
-      };
-    });
-
-    form.onsubmit = async (e) => {
-      e.preventDefault();
-      const m = input.value.trim();
-      if (!m || !lang) return;
-
-      // a switch while waiting only affects the next question
-      const t = STRINGS[lang];
-      const requestLang = lang;
-      add(m, 'user');
-      input.value = '';
-      input.style.height = '42px';
-      busy = true;
-      send.disabled = true;
-
-      // status line with elapsed time until text arrives, since local answers can take a while
-      const bubble = add(t.loading(0), 'ai', false);
-      bubble.setAttribute('aria-live', 'polite');
-      bubble.setAttribute('aria-busy', 'true');
-      const started = Date.now();
-      const secs = () => Math.round((Date.now() - started) / 1000);
-      let status = (s) => t.loading(s);
-      let text = '';
-      const showStatus = () => { if (!text) bubble.textContent = status(secs()); };
-      const ticker = setInterval(showStatus, 1000);
-
-      const controller = new AbortController();
-      let idle;
-      const touch = () => {
-        clearTimeout(idle);
-        idle = setTimeout(() => controller.abort(), CHAT_IDLE_TIMEOUT_MS);
-      };
-      const showError = (message) => {
-        const span = document.createElement('span');
-        span.className = 'text-rose-500 font-medium';
-        span.textContent = '⚠️ ' + message;
-        bubble.replaceChildren(span);
-      };
-      let finished = false;
-
-      const handle = (ev) => {
-        if (ev.type === 'thinking') { status = t.thinking; showStatus(); }
-        else if (ev.type === 'tool') { status = (s) => t.tool(ev.name, s); showStatus(); }
-        else if (ev.type === 'delta') { text += ev.text; bubble.innerHTML = renderMarkdown(text); }
-        else if (ev.type === 'reset') { text = ''; showStatus(); }
-        else if (ev.type === 'done') { finished = true; text = ev.answer || t.noAnswer; bubble.innerHTML = renderMarkdown(text); }
-        else if (ev.type === 'error') { finished = true; showError(ev.message); }
-        chat.scrollTop = chat.scrollHeight;
-      };
-
-      try {
-        touch();
-        const r = await fetch('/api/chat/stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: m, language: requestLang }),
-          signal: controller.signal
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-
-        // one json event per line; a chunk can end mid-line
-        const reader = r.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          touch();
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop();
-          for (const line of lines) if (line.trim()) handle(JSON.parse(line));
-        }
-        if (buffer.trim()) handle(JSON.parse(buffer));
-        if (!finished) showError(t.noAnswer);
-      } catch (err) {
-        showError(err.name === 'AbortError' ? t.timeout(CHAT_IDLE_TIMEOUT_MS / 1000) : t.error(err.message));
-      } finally {
-        clearInterval(ticker);
-        clearTimeout(idle);
-        bubble.setAttribute('aria-busy', 'false');
-        busy = false;
-        send.disabled = false;
-        input.focus();
-        chat.scrollTop = chat.scrollHeight;
-        lucide.createIcons();
-      }
-    };
-  </script>
 </body>
 </html>

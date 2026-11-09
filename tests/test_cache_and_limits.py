@@ -21,7 +21,7 @@ def make_client(monkeypatch, handler, **overrides):
     monkeypatch.setenv("KB4_T_MAIN", "real-token")
     cfg = AppConfig(
         consoles={"main": ConsoleConfig(display_name="Main", api_key_env="KB4_T_MAIN")},
-        kb4_rate_limit_rps=1000,
+        kb4_rate_limit_rps=4,
         **overrides,
     )
     kb = KnowBe4Client(cfg)
@@ -190,10 +190,11 @@ def test_tool_messages():
 
 async def test_tool_client_raises_tool_error(monkeypatch):
     from mcp.server.mcpserver.exceptions import ToolError
+
     from kb4_mcp.server_impl import ToolClient
 
     monkeypatch.setenv("KB4_T_MAIN", "real-token")
-    cfg = AppConfig(consoles={"main": ConsoleConfig(display_name="Main", api_key_env="KB4_T_MAIN")}, kb4_rate_limit_rps=1000)
+    cfg = AppConfig(consoles={"main": ConsoleConfig(display_name="Main", api_key_env="KB4_T_MAIN")}, kb4_rate_limit_rps=4)
     kb = ToolClient(cfg)
     kb._clients["main"] = httpx.AsyncClient(base_url="https://kb4.test", transport=httpx.MockTransport(lambda r: httpx.Response(401, json={})))
     kb._limiters["main"] = AsyncRateLimiter(1000)
@@ -206,3 +207,47 @@ def test_agent_passes_tool_error_text_to_model():
 
     result = SimpleNamespace(is_error=True, structured_content=None, content=[SimpleNamespace(text="KnowBe4 daily API limit reached")])
     assert json.loads(Agent._mcp_result_text(result)) == {"error": True, "message": "KnowBe4 daily API limit reached"}
+
+
+@pytest.mark.parametrize("path", [
+    "/v1/../v2/secret",
+    "/v1/%2e%2e/admin",
+    "/v1/users/../../v2",
+    "/v1//evil.example/x",
+    "/v1/users/..",
+    r"/v1\..\v2",
+    "/v2/users",
+    "https://evil.example/v1/users",
+])
+async def test_paths_outside_v1_are_refused(path):
+    kb = KnowBe4Client(AppConfig(consoles={"main": ConsoleConfig(display_name="Main", api_key_env="KB4_T_MAIN")}))
+    with pytest.raises(ValueError, match="/v1/"):
+        await kb.get("main", path)
+
+
+@pytest.mark.parametrize("path", ["/v1/users", "v1/users", "/v1/users/12/risk_score_history", "/v1/users/"])
+async def test_normal_v1_paths_still_reach_knowbe4(monkeypatch, path):
+    handler, calls = counting()
+    kb = make_client(monkeypatch, handler)
+    await kb.get("main", path)
+    assert calls and calls[0][0].startswith("/v1/users")
+    await kb.aclose()
+
+
+def test_two_processes_counting_at_once_lose_nothing(tmp_path):
+    path = tmp_path / "usage.json"
+    a, b = UsageTracker(path), UsageTracker(path)
+    a.record("main", now=1000.0)
+    b.record("main", now=1001.0)
+    a.record("main", now=1002.0)
+    assert UsageTracker(path).used("main", now=1003.0) == 3
+    assert not (tmp_path / "usage.tmp").exists()
+
+
+def test_corrupt_counter_file_starts_fresh_and_is_repaired(tmp_path):
+    path = tmp_path / "usage.json"
+    path.write_text("{broken", encoding="utf-8")
+    tracker = UsageTracker(path)
+    assert tracker.used("main", now=1000.0) == 0
+    tracker.record("main", now=1000.0)
+    assert json.loads(path.read_text(encoding="utf-8")) == {"main": [1000.0]}

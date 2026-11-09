@@ -3,6 +3,63 @@
 @tailwind components;
 @tailwind utilities;
 
+/* phones use the whole screen; dvh follows the browser bars where vh does not */
+.app-shell { height: 100vh; height: 100dvh; }
+@media (min-width: 640px) {
+  .app-shell { height: 94vh; height: 94dvh; }
+}
+
+@layer components {
+  /* every button and the question box share one height (44px, a comfortable touch target), radius and type */
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 h-11 min-w-[44px] px-4 rounded-xl text-sm font-medium whitespace-nowrap select-none shrink-0
+      transition-colors duration-150 active:scale-[0.97]
+      focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900
+      disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100;
+  }
+  .btn-primary {
+    @apply bg-[#0071E3] text-white shadow-md shadow-blue-500/25 hover:bg-[#0062C4] disabled:hover:bg-[#0071E3];
+  }
+  .btn-secondary {
+    @apply bg-white/90 dark:bg-slate-800/90 text-slate-700 dark:text-slate-200 ring-1 ring-inset ring-slate-200 dark:ring-slate-700
+      hover:text-blue-700 hover:ring-blue-300 dark:hover:text-blue-300 dark:hover:ring-blue-500/60
+      disabled:hover:text-slate-700 disabled:hover:ring-slate-200 dark:disabled:hover:text-slate-200 dark:disabled:hover:ring-slate-700;
+  }
+  /* the language switch: same 44px buttons, joined */
+  .segmented {
+    @apply flex items-center rounded-xl ring-1 ring-inset ring-slate-200 dark:ring-slate-700 bg-slate-200/50 dark:bg-slate-800/60 overflow-hidden;
+  }
+  .lang-btn {
+    @apply h-11 min-w-[44px] px-3 text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors
+      focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500;
+  }
+  .lang-btn[aria-pressed="true"] {
+    @apply bg-white dark:bg-slate-700 text-blue-700 dark:text-blue-300 shadow-sm;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 h-11 px-3 rounded-xl text-sm font-medium whitespace-nowrap
+      bg-white/60 dark:bg-slate-800/60 ring-1 ring-inset ring-slate-200 dark:ring-slate-700 text-slate-600 dark:text-slate-300;
+  }
+  .status-dot { @apply w-2 h-2 rounded-full bg-slate-400; }
+  .chip[data-state="ok"] .status-dot { @apply bg-emerald-500; }
+  .chip[data-state="degraded"] .status-dot { @apply bg-amber-500; }
+  .chip[data-state="offline"] .status-dot { @apply bg-rose-500; }
+
+  .msg-ai { @apply flex items-start gap-3 max-w-full sm:max-w-[88%]; }
+  .msg-user { @apply flex justify-end; }
+  .avatar {
+    @apply w-8 h-8 rounded-2xl bg-gradient-to-tr from-blue-600 to-sky-400 flex items-center justify-center text-white shadow-md shrink-0 mt-0.5;
+  }
+  .bubble-ai {
+    @apply min-w-0 bg-white/85 dark:bg-slate-800/85 backdrop-blur-md border border-white/90 dark:border-slate-700/80 rounded-2xl rounded-tl-sm
+      text-slate-700 dark:text-slate-200 shadow-bubble-ai [overflow-wrap:anywhere];
+  }
+  .bubble-user {
+    @apply bg-[#0071E3] text-white p-3.5 px-4 rounded-2xl rounded-tr-sm text-sm leading-relaxed shadow-bubble-user max-w-[85%] sm:max-w-[80%]
+      whitespace-pre-wrap [overflow-wrap:anywhere];
+  }
+}
+
 /* thin scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
@@ -20,17 +77,31 @@
 }
 
 /* markdown inside the assistant's chat bubble */
+.prose-ai { --strong: #0f172a; --line: rgba(0, 0, 0, 0.08); --head: rgba(0, 0, 0, 0.03); --code: rgba(0, 0, 0, 0.06); --link: #0062C4; --link-hover: #004f9e; }
+@media (prefers-color-scheme: dark) {
+  .prose-ai { --strong: #f8fafc; --line: rgba(255, 255, 255, 0.12); --head: rgba(255, 255, 255, 0.05); --code: rgba(255, 255, 255, 0.1); --link: #7cb8ff; --link-hover: #a8d0ff; }
+}
 .prose-ai p { margin-bottom: 0.75rem; }
 .prose-ai p:last-child { margin-bottom: 0; }
 .prose-ai ul, .prose-ai ol { margin-left: 1.25rem; margin-bottom: 0.75rem; }
 .prose-ai ul { list-style-type: disc; }
 .prose-ai ol { list-style-type: decimal; }
 .prose-ai li { margin-bottom: 0.25rem; }
-.prose-ai strong { font-weight: 600; color: #0f172a; }
-.prose-ai h1, .prose-ai h2, .prose-ai h3 { font-weight: 700; margin-top: 1rem; margin-bottom: 0.5rem; color: #0f172a; }
-.prose-ai code { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; background: rgba(0,0,0,0.06); padding: 0.15rem 0.4rem; border-radius: 6px; font-size: 0.85em; }
+.prose-ai strong { font-weight: 600; color: var(--strong); }
+.prose-ai h1, .prose-ai h2, .prose-ai h3 { font-weight: 700; margin-top: 1rem; margin-bottom: 0.5rem; color: var(--strong); }
+.prose-ai code { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; background: var(--code); padding: 0.15rem 0.4rem; border-radius: 6px; font-size: 0.85em; }
 .prose-ai pre { background: #0f172a; color: #f8fafc; padding: 1rem; border-radius: 12px; overflow-x: auto; margin: 0.75rem 0; }
 .prose-ai pre code { background: transparent; color: inherit; padding: 0; }
-.prose-ai table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; font-size: 0.875rem; }
-.prose-ai th, .prose-ai td { border: 1px solid rgba(0, 0, 0, 0.08); padding: 8px 12px; text-align: left; }
-.prose-ai th { background: rgba(0, 0, 0, 0.03); font-weight: 600; }
+/* wide tables scroll inside the bubble instead of being cut off */
+.prose-ai .table-wrap { overflow-x: auto; margin: 0.75rem 0; -webkit-overflow-scrolling: touch; }
+.prose-ai table { min-width: 100%; border-collapse: collapse; font-size: 0.875rem; overflow-wrap: normal; }
+.prose-ai th, .prose-ai td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; }
+.prose-ai th { white-space: nowrap; }
+.prose-ai th { background: var(--head); font-weight: 600; }
+.prose-ai img { display: block; max-width: 100%; height: auto; margin: 0.75rem 0; border-radius: 12px; border: 1px solid var(--line); background: #fff; }
+.prose-ai a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.prose-ai a:hover { color: var(--link-hover); }
+.prose-ai .reply-time { margin-top: 0.5rem; font-size: 11px; color: #64748b; }
+@media (prefers-color-scheme: dark) {
+  .prose-ai .reply-time { color: #94a3b8; }
+}

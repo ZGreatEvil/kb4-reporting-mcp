@@ -1,8 +1,9 @@
+from datetime import date
+
 import pytest
 
 from config.settings import AppConfig, ConsoleConfig
 from kb4_mcp import summaries
-
 
 USERS = [
     {"id": 1, "first_name": "Ana", "last_name": "Low", "email": "ana@example.com", "job_title": "Clerk", "department": "Finance", "status": "active", "current_risk_score": 10.0, "phish_prone_percentage": 0.0},
@@ -139,3 +140,153 @@ async def test_compare_consoles(monkeypatch):
     assert [c["console"] for c in result["consoles"]] == ["second", "main"]
     reasons = {u["console"]: u["reason"] for u in result["unavailable"]}
     assert reasons == {"broken": "request failed (RuntimeError)", "off": "no API key configured"}
+
+
+# readable summaries: levels, trends, why-signals, paging
+
+
+
+@pytest.mark.parametrize("score,level", [(10, "Low"), (40, "Low"), (40.24, "Low"), (40.5, "Medium"), (47, "Medium"), (47.4, "Medium"), (48, "High"), (53, "High"), (53.6, "Critical"), (54, "Critical"), (90, "Critical"), (None, None)])
+def test_risk_levels(score, level):
+    assert summaries.risk_level(score) == level
+
+
+HISTORY = [
+    {"date": "2026-08-03T00:00:00.000Z", "risk_score": 45.123456},
+    {"date": "2026-10-05T00:00:00.000Z", "risk_score": 42.0},
+    {"date": "2026-10-26T00:00:00.000Z", "risk_score": 40.5},
+    {"date": "2026-11-02T00:00:00.000Z", "risk_score": 39.39812},
+]
+
+
+def test_history_stats():
+    stats = summaries._history_stats(HISTORY, today=date(2026, 11, 2))
+    assert stats["current_score"] == 39.4 and stats["current_level"] == "Low"
+    # 30 days before 2026-11-02 is 2026-10-03; the newest earlier point (2026-08-03) is too old to stand for it
+    assert stats["change_vs_30_days_ago"] is None
+    # 90 days before is 2026-08-04; 2026-08-03 is close enough
+    assert stats["change_vs_90_days_ago"] == {"from_date": "2026-08-03", "from_score": 45.12, "to_score_now": 39.4, "change": -5.73}
+    assert stats["data_gap"] is None
+    assert stats["weekly_snapshots_last_3_months"] == {"average": 40.63, "lowest": 39.4, "highest": 42.0}
+    assert stats["newest_weekly_snapshot"] == {"date": "2026-11-02", "score": 39.4}
+    assert summaries._history_stats([])["points_available"] == 0
+
+
+def test_trend_uses_live_score_when_snapshot_lags():
+    # the live account score was 39.4 while the newest weekly snapshot still said 45.25
+    history = [{"date": "2026-10-05T00:00:00.000Z", "risk_score": 45.8}, {"date": "2026-11-02T00:00:00.000Z", "risk_score": 45.25}]
+    stats = summaries._history_stats(history, today=date(2026, 11, 6), current=39.398)
+    assert stats["current_score"] == 39.4 and stats["current_level"] == "Low"
+    assert stats["change_vs_30_days_ago"]["change"] == -6.4
+    assert stats["newest_weekly_snapshot"]["score"] == 45.25
+
+
+class RichKB(FakeKB):
+    async def get_user(self, console, user_id):
+        return USERS[1]
+
+    async def get_user_risk_history(self, console, user_id, full=False):
+        return list(HISTORY)
+
+    async def list_training_enrollments(self, console, user_id=None, **kw):
+        return [{"status": "Past Due"}, {"status": "Past Due"}, {"status": "Passed"}]
+
+    async def get_account_risk_history(self, console, full=False):
+        return list(HISTORY)
+
+    async def get_account(self, console):
+        return {"name": "Acct", "current_risk_score": 39.39812}
+
+
+async def test_user_risk_summary_has_why_signals():
+    s = await summaries.user_risk_summary(RichKB(), "main", 2)
+    assert s["user"]["name"] == "Budi High" and s["user"]["risk_level"] == "Critical"
+    w = s["why_signals"]
+    assert (w["phish_prone_percent"], w["training_enrollments"], w["training_by_status"]) == (50.0, 3, {"Past Due": 2, "Passed": 1})
+    assert w["phish_prone_vs_benchmark"]["comparison"].startswith("higher than every KnowBe4 global benchmark")
+    assert s["risk_trend"]["current_score"] == 80.5 and s["risk_trend"]["current_level"] == "Critical"
+    assert "Low 10-40" in s["scale"]
+
+
+async def test_account_overview():
+    s = await summaries.account_risk_overview(RichKB(), "main")
+    assert s["current"] == {"score": 39.4, "level": "Low"}
+    assert s["risk_trend"]["current_score"] == 39.4
+    w = s["why_signals"]
+    assert w["active_users"] == 4 and w["users_who_failed_a_phishing_test"] == 2
+    assert w["average_user_phish_prone_percent"] == 25.0
+    assert w["users_by_risk_level"] == {"Low": 2, "Critical": 1}
+
+
+async def test_list_users_page_and_next():
+    capped = await summaries.list_users_page(FakeKB(), "main", limit=100)
+    assert len(capped["users"]) == 4  # only 4 fake users; the cap is 20
+    first = await summaries.list_users_page(FakeKB(), "main", limit=2)
+    assert first["showing"] == "1-2 of 4" and first["next_offset"] == 2
+    assert [u["id"] for u in first["users"]] == [2, 3]
+    assert [u["number"] for u in first["users"]] == [1, 2]
+    second = await summaries.list_users_page(FakeKB(), "main", offset=first["next_offset"], limit=2)
+    assert second["showing"] == "3-4 of 4" and second["next_offset"] is None
+    by_name = await summaries.list_users_page(FakeKB(), "main", sort="name")
+    assert [u["name"] for u in by_name["users"]][:2] == ["Ana Low", "Budi High"]
+    past_end = await summaries.list_users_page(FakeKB(), "main", offset=10)
+    assert past_end["users"] == [] and past_end["next_offset"] is None
+
+
+def test_user_rows_are_rounded_and_readable():
+    row = summaries._user_row({"id": 1, "first_name": "A", "current_risk_score": 52.0618896484375, "phish_prone_percentage": 11.11111})
+    assert row["risk_score"] == 52.06 and row["risk_level"] == "High" and row["phish_prone_percent"] == 11.11
+    assert "current_risk_score" not in row
+
+
+async def test_find_user_tells_model_to_ask_when_several_match():
+    several = await summaries.find_user(FakeKB(), "main", "IT")
+    assert several["match_count"] > 1 and "ask which one" in several["next_step"]
+    one = await summaries.find_user(FakeKB(), "main", "budi")
+    assert "user_risk_summary" in one["next_step"]
+
+
+
+def test_stale_history_is_flagged_not_described_as_recent():
+    # a person whose snapshots stopped in june, asked about in november
+    history = [{"date": "2026-05-04T00:00:00.000Z", "risk_score": 46.08}, {"date": "2026-06-15T00:00:00.000Z", "risk_score": 40.0}]
+    stats = summaries._history_stats(history, today=date(2026, 11, 6), current=37.92)
+    assert stats["change_vs_30_days_ago"] is None and stats["change_vs_90_days_ago"] is None
+    assert stats["weekly_snapshots_last_3_months"] is None
+    assert "No weekly snapshots since 2026-06-15" in stats["data_gap"]
+
+
+@pytest.mark.parametrize("value,expected", [
+    (14.31, "higher than the figure after 12 months of training (4.2%) but lower than the figure after 90 days of training (20.1%)"),
+    (100, "higher than every KnowBe4 global benchmark, including before training (33.2%)"),
+    (0, "lower than every KnowBe4 global benchmark, including after 12 months of training (4.2%)"),
+    (25, "higher than the figure after 90 days of training (20.1%) but lower than the figure before training (33.2%)"),
+])
+def test_ppp_benchmark_comparison(value, expected):
+    assert summaries.ppp_vs_benchmark(value)["comparison"] == expected
+    assert summaries.ppp_vs_benchmark(None) is None
+
+
+async def test_find_user_flags_ask_user():
+    assert (await summaries.find_user(FakeKB(), "main", "IT"))["ask_user"] is True
+    assert (await summaries.find_user(FakeKB(), "main", "budi"))["ask_user"] is False
+
+
+def test_trend_headline_states_each_period_exactly():
+    stats = {"points_available": 9, "current_score": 40.24, "current_level": "Low",
+             "change_vs_30_days_ago": None,
+             "change_vs_90_days_ago": {"from_score": 48.39, "change": -8.15}, "data_gap": None}
+    assert summaries._trend_headline("Rina", stats) == (
+        "Rina: risk score now 40.24 (Low). No snapshot from 30 days ago. 90 days ago it was 48.39 (change -8.15)."
+    )
+    assert summaries._trend_headline("Rina", {"points_available": 0}) == "Rina: no risk score history available."
+
+
+async def test_overview_headline_states_users_per_level():
+    class KB(FakeKB):
+        async def get_account_risk_history(self, console, full=False):
+            return []
+
+    result = await summaries.account_risk_overview(KB(), "main")
+    # active users: 10.0 Low, 80.5 Critical, 40.0 Low, one without a score
+    assert result["headline"].endswith("Active users per risk level: Low 2, Critical 1 (4 in total); 2 of them failed a phishing test.")

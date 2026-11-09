@@ -1,0 +1,9 @@
+# qwen3.5:4b with the context this app needs baked in, so it no longer depends on OLLAMA_CONTEXT_LENGTH
+# (ollama's openai-compatible api cannot set the context size itself)
+# create it with: ollama create kb4-analyst -f ollama\Modelfile
+FROM qwen3.5:4b
+PARAMETER num_ctx 32768
+# qwen's "precise" thinking-mode sampling; the base model's presence_penalty 1.5 can make it mix in chinese
+PARAMETER temperature 0.6
+PARAMETER top_p 0.95
+PARAMETER presence_penalty 0

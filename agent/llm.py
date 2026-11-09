@@ -46,6 +46,8 @@ class LLMClient:
             kwargs["temperature"] = cfg.llm_temperature
         if cfg.llm_top_p is not None:
             kwargs["top_p"] = cfg.llm_top_p
+        if cfg.llm_presence_penalty is not None:
+            kwargs["presence_penalty"] = cfg.llm_presence_penalty
         if cfg.llm_reasoning_effort:
             kwargs["reasoning_effort"] = cfg.llm_reasoning_effort
         return kwargs

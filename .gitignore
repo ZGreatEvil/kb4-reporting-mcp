@@ -27,3 +27,7 @@ instructions.md
 *.key
 *.bak
 *.dump
+# generated at runtime: charts, csv exports, nist pdfs and their search index
+web/static/charts/
+exports/
+knowledge/

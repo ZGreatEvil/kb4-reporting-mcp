@@ -9,7 +9,7 @@ def make_client(monkeypatch, handler, **overrides):
     monkeypatch.setenv("KB4_T_MAIN", "real-token")
     cfg = AppConfig(
         consoles={"main": ConsoleConfig(display_name="Main", api_key_env="KB4_T_MAIN")},
-        kb4_rate_limit_rps=1000,
+        kb4_rate_limit_rps=4,
         **overrides,
     )
     kb = KnowBe4Client(cfg)

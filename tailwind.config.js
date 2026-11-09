@@ -1,7 +1,9 @@
 // tailwind 3.4 config for web/static/app.css; rebuild with the standalone cli (see README, "Changing the styles")
 module.exports = {
-  // class names in the page's markup and in its script (the language switch toggles some at runtime)
-  content: ["./web/static/index.html"],
+  // class names in the page's markup and in its script (the script builds bubbles at runtime)
+  content: ["./web/static/index.html", "./web/static/app.js"],
+  // follows the system's light/dark setting
+  darkMode: "media",
   theme: {
     extend: {
       fontFamily: {

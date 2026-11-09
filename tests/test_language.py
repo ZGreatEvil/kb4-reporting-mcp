@@ -11,7 +11,8 @@ from config.settings import AppConfig, ConsoleConfig
 
 
 def test_every_message_has_both_languages_with_same_placeholders():
-    fields = lambda s: {f for _, f, _, _ in string.Formatter().parse(s) if f}
+    def fields(s):
+        return {f for _, f, _, _ in string.Formatter().parse(s) if f}
     for key, texts in MESSAGES.items():
         assert set(texts) == set(LANGUAGE_NAMES), key
         assert fields(texts["id"]) == fields(texts["en"]), key
@@ -27,13 +28,14 @@ def test_prompt_follows_language(monkeypatch, language, name):
     cfg = AppConfig(consoles={"main": ConsoleConfig(display_name="Main", api_key_env="KB4_T_MAIN")})
     prompt = build_system_prompt(cfg, language)
     assert f"Answer in {name} unless" in prompt
-    assert "Do not add scales, benchmarks, ratings or interpretations" in prompt
+    assert "Never invent benchmarks, advice or reasons" in prompt
+    assert "Low 10-40, Medium 41-47" in prompt
 
 
 def test_llm_error_translates():
     err = LLMError("llm_model_missing", model="m:1b")
-    assert "belum tersedia" in str(err)
-    assert err.text("en") == "Model 'm:1b' is not available on the LLM server. Run: ollama pull m:1b"
+    assert "belum ada di server LLM" in str(err)
+    assert err.text("en") == msg("llm_model_missing", "en", model="m:1b")
 
 
 async def test_agent_messages_follow_language(monkeypatch):
@@ -71,11 +73,12 @@ async def test_agent_messages_follow_language(monkeypatch):
 @pytest.fixture
 def client(monkeypatch):
     from fastapi.testclient import TestClient
+
     import web.main as web_main
 
     seen = {}
 
-    async def fake_ask(message, language="id"):
+    async def fake_ask(message, language="id", history=None):
         seen["language"] = language
         if message == "boom":
             raise LLMError("llm_unreachable", url="http://x")

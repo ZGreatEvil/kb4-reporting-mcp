@@ -1,29 +1,16 @@
+from typing import Optional
+
 import httpx
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+
 from config.settings import load_config
-from knowbe4.client import KnowBe4APIError, KnowBe4Client, KnowBe4DailyLimitError
-from kb4_mcp import summaries
+from kb4_mcp import outputs, summaries
+from kb4_mcp.knowledge import NistSearch
+from knowbe4.client import KnowBe4APIError, KnowBe4Client, readable_error
 
-from typing import Optional
-
-STATUS_HINTS = {
-    401: "the API key was rejected (wrong, expired, or not a Reporting API key)",
-    403: "the API key is not allowed to read this data",
-    404: "not found; check the id",
-    429: "KnowBe4 rate limit hit; try again in a few minutes",
-}
-
-
-def tool_message(exc: Exception) -> str:
-    if isinstance(exc, KnowBe4DailyLimitError):
-        return (f"KnowBe4 daily API limit reached for this console ({exc.used} of {exc.limit} requests "
-                "in the last 24 hours). Tell the user to try again later.")
-    if isinstance(exc, KnowBe4APIError):
-        return f"KnowBe4 API error {exc.status_code}: {STATUS_HINTS.get(exc.status_code, 'the request failed')}."
-    if isinstance(exc, httpx.HTTPError):
-        return "KnowBe4 could not be reached (network error or timeout). Try again later."
-    return str(exc)
+# kept under this name for mcp clients and tests
+tool_message = readable_error
 
 
 class ToolClient(KnowBe4Client):
@@ -33,11 +20,12 @@ class ToolClient(KnowBe4Client):
         try:
             return await super().get(console, path, params)
         except (KnowBe4APIError, httpx.HTTPError, ValueError) as exc:
-            raise ToolError(tool_message(exc)) from exc
+            raise ToolError(readable_error(exc)) from exc
 
 
 CONFIG=load_config()
 KB4=ToolClient(CONFIG)
+NIST=NistSearch()
 mcp=MCPServer("KnowBe4 Multi-Console Reporting", instructions="Read-only KnowBe4 Reporting API server. Prefer the summary tools; never reveal API keys.", version="1.1.0")
 
 @mcp.tool(description="List configured consoles, whether each has an API key, and KnowBe4 requests used in the last 24 hours.")
@@ -51,10 +39,30 @@ async def compare_consoles_risk()->dict: return await summaries.compare_consoles
 async def top_users_by_risk(console:str,limit:int=10,status:str="active")->dict: return await summaries.top_users_by_risk(KB4,console,limit,status)
 @mcp.tool(description="PREFER for finding a person: search users by name, email, job title or department; returns ids.")
 async def find_user(console:str,query:str,limit:int=10)->dict: return await summaries.find_user(KB4,console,query,limit)
-@mcp.tool(description="PREFER for phishing tests: latest (sort=latest) or worst (sort=highest_ppp) tests with phish-prone %.")
-async def phishing_campaign_summary(console:str,limit:int=10,sort:str="latest")->dict: return await summaries.phishing_campaign_summary(KB4,console,limit,sort)
+@mcp.tool(description="PREFER for phishing tests: latest (sort=latest) or worst (sort=highest_ppp) tests with phish-prone %. Optional period: start_date / end_date (YYYY-MM-DD).")
+async def phishing_campaign_summary(console:str,limit:int=10,sort:str="latest",start_date:Optional[str]=None,end_date:Optional[str]=None)->dict: return await summaries.phishing_campaign_summary(KB4,console,limit,sort,start_date,end_date)
 @mcp.tool(description="PREFER for training: campaigns newest first with completion %, optional campaign_id or start-date range (YYYY-MM-DD).")
 async def training_completion_summary(console:str,campaign_id:Optional[int]=None,start_date:Optional[str]=None,end_date:Optional[str]=None,limit:int=10)->dict: return await summaries.training_completion_summary(KB4,console,campaign_id,start_date,end_date,limit)
+@mcp.tool(description="PREFER for the organisation's risk: current score and level, 30/90-day change, 3-month average, and why (phishing failures, users per level). Optional period: start_date / end_date (YYYY-MM-DD).")
+async def account_risk_overview(console:str,start_date:Optional[str]=None,end_date:Optional[str]=None)->dict: return await summaries.account_risk_overview(KB4,console,start_date,end_date)
+@mcp.tool(description="PREFER for one person's risk or risk history (needs the id from find_user): score, level, trend, 3-month average, and why (phishing, training status). Optional period: start_date / end_date (YYYY-MM-DD).")
+async def user_risk_summary(console:str,user_id:int,start_date:Optional[str]=None,end_date:Optional[str]=None)->dict: return await summaries.user_risk_summary(KB4,console,user_id,start_date,end_date)
+@mcp.tool(description="PREFER for charts/graphs: draws one and attaches it. chart = risk_trend (line; user_id for one person), users_by_level (pie), top_users (bar), phishing_tests (bar), training_completion (bar), groups (bar, riskiest groups). Optional period: start_date / end_date (YYYY-MM-DD).")
+async def make_chart(console:str,chart:str,user_id:Optional[int]=None,limit:int=10,language:str="id",start_date:Optional[str]=None,end_date:Optional[str]=None)->dict: return await outputs.make_chart(KB4,console,chart,language,user_id,limit,start_date,end_date)
+@mcp.tool(description="Export data as a CSV file download (export, CSV, Excel, unduh). dataset = users (status: active by default, archived, or all), phishing_tests, training_campaigns, risk_history (the organisation's history: leave user_id out; one person: their numeric user_id). Optional period: start_date / end_date (YYYY-MM-DD).")
+async def export_csv(console:str,dataset:str,user_id:Optional[int]=None,status:str="active",start_date:Optional[str]=None,end_date:Optional[str]=None)->dict: return await outputs.export_csv(KB4,console,dataset,user_id,status,start_date,end_date)
+@mcp.tool(description="Search official NIST guidance (SP 800-50r1 awareness and training programmes, CSF 2.0, NIST Phish Scale). query in ENGLISH keywords. For best practice, framework or 'what does NIST say' questions.")
+def search_nist(query:str,limit:int=4)->dict: return NIST.search(query,limit)
+@mcp.tool(description="PREFER for listing users: one page (default 20) sorted by risk or name, with the total and next_offset for 'show more'.")
+async def list_users_page(console:str,status:str="active",sort:str="risk",offset:int=0,limit:int=20)->dict: return await summaries.list_users_page(KB4,console,status,sort,offset,limit)
+@mcp.tool(description="PREFER for groups, teams or departments: which groups are riskiest (KnowBe4 group risk score, members, phish-prone %). by=group (default) or department/location/division.")
+async def risk_by_group(console:str,by:str="group",limit:int=10)->dict: return await summaries.risk_by_group(KB4,console,by,limit)
+@mcp.tool(description="PREFER for repeat clickers: people who failed two or more of the latest phishing tests (tests = how many recent tests to check, max 12). Optional period: start_date / end_date (YYYY-MM-DD).")
+async def repeat_phishing_failures(console:str,tests:int=6,limit:int=10,start_date:Optional[str]=None,end_date:Optional[str]=None)->dict: return await summaries.repeat_phishing_failures(KB4,console,tests,limit,start_date,end_date)
+@mcp.tool(description="PREFER for one phishing test in detail: who clicked or failed, who reported it, report rate. Latest test (in the period, if given) unless pst_id is given. Optional period: start_date / end_date (YYYY-MM-DD).")
+async def phishing_test_detail(console:str,pst_id:Optional[int]=None,limit:int=20,start_date:Optional[str]=None,end_date:Optional[str]=None)->dict: return await summaries.phishing_test_detail(KB4,console,pst_id,limit,start_date,end_date)
+@mcp.tool(description="PREFER for overdue, past-due or unfinished training: how many enrolments are Past Due, who has the most, which modules. Optional period: start_date / end_date (YYYY-MM-DD).")
+async def overdue_training(console:str,limit:int=10,start_date:Optional[str]=None,end_date:Optional[str]=None)->dict: return await summaries.overdue_training(KB4,console,limit,start_date,end_date)
 
 @mcp.tool(description="Account name, subscription and current risk score for one console.")
 async def knowbe4_health_check(console:str)->dict: return await KB4.health_check(console)
@@ -105,10 +113,12 @@ async def get_training_policy(console:str,policy_id:int): return await KB4.get_p
 
 @mcp.tool(description="Read-only GET against an allowed /v1/* Reporting API path.")
 async def knowbe4_raw_get(console:str,path:str,params:Optional[dict]=None):
-    if not CONFIG.enable_raw_get: raise RuntimeError("knowbe4_raw_get is disabled")
+    if not CONFIG.enable_raw_get:
+        raise RuntimeError("knowbe4_raw_get is disabled")
     return await KB4.get(console,path,params)
 
 def run_mcp()->None:
     mcp.run(transport="streamable-http",host=CONFIG.mcp_host,port=CONFIG.mcp_port,streamable_http_path=CONFIG.mcp_path,json_response=True,stateless_http=True,max_request_body_size=8*1024*1024)
 
-if __name__=="__main__": run_mcp()
+if __name__=="__main__":
+    run_mcp()

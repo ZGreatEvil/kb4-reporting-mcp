@@ -1,0 +1,2 @@
+# vendored libraries stay byte-identical to the published files (their hashes are checked against jsDelivr)
+web/static/vendor/** -text

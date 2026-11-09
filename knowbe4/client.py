@@ -6,10 +6,15 @@ import json
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import urljoin
+from urllib.parse import unquote
 
 import httpx
-from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    AsyncRetrying,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from config.settings import AppConfig, ConsoleConfig
 
@@ -33,6 +38,26 @@ class KnowBe4DailyLimitError(KnowBe4APIError):
         self.used = used
         self.limit = limit
         super().__init__(429, f"daily request limit reached ({used} of {limit} in the last 24 hours)")
+
+
+STATUS_HINTS = {
+    401: "the API key was rejected (wrong, expired, or not a Reporting API key)",
+    403: "the API key is not allowed to read this data",
+    404: "not found; check the id",
+    429: "KnowBe4 rate limit hit; try again in a few minutes",
+}
+
+
+def readable_error(exc: Exception) -> str:
+    """one plain sentence for a failed request; never the response body, which can echo data"""
+    if isinstance(exc, KnowBe4DailyLimitError):
+        return (f"KnowBe4 daily API limit reached for this console ({exc.used} of {exc.limit} requests "
+                "in the last 24 hours). Tell the user to try again later.")
+    if isinstance(exc, KnowBe4APIError):
+        return f"KnowBe4 API error {exc.status_code}: {STATUS_HINTS.get(exc.status_code, 'the request failed')}."
+    if isinstance(exc, httpx.HTTPError):
+        return "KnowBe4 could not be reached (network error or timeout). Try again later."
+    return str(exc)
 
 
 RETRYABLE_STATUS = {429, 502, 503, 504}
@@ -70,8 +95,14 @@ class UsageTracker:
     def record(self, console: str, now: float | None = None) -> None:
         now = time.time() if now is None else now
         self._recent(console, now).append(now)
+        # another process (the mcp server and test_knowbe4.py, say) may have counted too: merge, don't overwrite
+        for key, stamps in self._load().items():
+            self._stamps[key] = sorted(set(self._stamps.get(key, [])) | {t for t in stamps if t > now - DAY_SECONDS})
         try:
-            self.path.write_text(json.dumps(self._stamps), encoding="utf-8")
+            # a crash mid-write must not leave a broken file, which would reset the count
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._stamps), encoding="utf-8")
+            tmp.replace(self.path)
         except OSError:
             # counting still works in memory
             pass
@@ -203,7 +234,9 @@ class KnowBe4Client:
 
     async def get(self, console: str, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         path = "/" + path.lstrip("/")
-        if not path.startswith("/v1/"):
+        # "/v1/../v2" would pass a prefix check and be normalised to /v2 by httpx
+        segments = unquote(path.split("?", 1)[0]).split("/")[1:]
+        if not path.startswith("/v1/") or "\\" in unquote(path) or any(s in ("", ".", "..") for s in segments[:-1]) or segments[-1] in (".", ".."):
             raise ValueError("Only KnowBe4 Reporting API /v1/* paths are allowed")
 
         ttl = self.config.kb4_cache_seconds
