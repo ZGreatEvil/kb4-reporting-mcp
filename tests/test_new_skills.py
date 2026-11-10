@@ -197,7 +197,7 @@ async def test_every_new_tool_has_a_headline_built_from_the_data():
     detail = await summaries.phishing_test_detail(kb, "main")
     assert detail["headline"] == 'Phishing test "New" (2026-09-01): 2 of 3 people failed it (66.67%) and 2 reported it (report rate 66.67%).'
     overdue = await summaries.overdue_training(kb, "main")
-    assert overdue["headline"] == "3 of 4 training enrolments (75.0%) are Past Due, held by 2 people; Ana A has the most (2)."
+    assert overdue["headline"] == "3 of 4 training enrolments (75.0%) are Past Due, and 2 people have at least one; Ana A has the most (2)."
     for result in (groups, repeat, detail, overdue):
         assert "do not add advice" in result["note"]
 

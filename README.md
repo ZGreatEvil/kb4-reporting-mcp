@@ -17,6 +17,9 @@ A local, read-only MCP server and web chat application for KnowBe4 Reporting API
 - Charts (line, bar, pie) drawn with matplotlib and CSV exports, both produced in code from KnowBe4 data
 - Group and department breakdowns, repeat phishing clickers, one phishing test in detail (who clicked, who reported it, report rate) and overdue training
 - Answers on security awareness guidance from three NIST publications, with page citations, searched locally
+- Periods in the question ("dari 2026", "3 bulan terakhir", "last quarter"), applied to every tool that can filter by date; without one, the past 12 months
+- Casual Indonesian and English, chat spellings, uncommon words and typos ("brp yg nunggak trainnig") understood
+- A fixed answer to "apa saja yang bisa kamu lakukan?" / "what can you do?" listing only what the bot really does
 - Health-check script
 - No Docker required
 
@@ -268,12 +271,12 @@ The page uses `POST /api/chat/stream` (same request body), which answers with on
 | `{"type": "tool", "name": "..."}` | A tool is being called |
 | `{"type": "delta", "text": "..."}` | More answer text |
 | `{"type": "reset"}` | Discard the text so far (it belonged to a step that turned into a tool call) |
-| `{"type": "done", "answer": "..."}` | Finished; `answer` is the complete final text |
+| `{"type": "done", "answer": "...", "note": "..."}` | Finished; `answer` is the complete final text, `note` the hidden `[Data used: ...]` line to send back with the history |
 | `{"type": "error", "message": "..."}` | Failed; `message` is already in the chosen language |
 
 The page gives up only after 180 seconds without any event, so long answers that keep progressing are not cut off. Questions sent while an answer is still coming are queued (up to 5) and sent in order; each answer shows how long it took. While the bot works the bubble shows what it is doing; the answer then appears once, complete with its chart (showing text as it was written made a checked or redone answer vanish and appear twice). **Baru / New** starts a fresh conversation. The badge in the header shows whether the bot can answer (Online, Terbatas / Limited, Offline), checked every 30 seconds. The page follows the system's light or dark mode and works from a 320 px phone to an ultrawide screen.
 
-The small local model sometimes answers from memory or loses track of pages, so the agent enforces a few rules in code: numbers that appear nowhere in the question, the definitions or earlier answers must come from a tool call made for this question; users tables and their headings are built from the data; and "lanjut" / "show 20" / "21-40" / "2" are resolved from short hidden notes stored with each answer. An answer that comes back in the wrong language (or slips into Chinese) is rewritten once. Every number in an answer must appear in the data the tools returned this turn, the question or the definitions (rounding and Indonesian/English separators allowed; small counts up to 10 are prose). If not, the model is told which numbers and rewrites once; any sentence that still carries one is removed. This guarantees each number exists in the data, not that it is used in the right context, which is why the summary tools also give a ready-made headline. `POST /api/chat` still returns the whole answer in one response.
+The small local model sometimes answers from memory or loses track of pages, so the agent enforces a few rules in code: numbers that appear nowhere in the question, the definitions or earlier answers must come from a tool call made for this question; users tables and their headings are built from the data; and "lanjut" / "show 20" / "21-40" / "2" are resolved from short hidden notes stored with each answer. An answer that comes back in the wrong language (or slips into Chinese) is rewritten once. Every number in an answer must appear in the data the tools returned this turn, the question or the definitions (rounding and Indonesian/English separators allowed; small counts up to 10 are prose). If not, the model is told which numbers and rewrites once; any sentence that still carries one is removed. This guarantees each number exists in the data, not that it is used in the right context, which is why the summary tools also give a ready-made headline. `POST /api/chat` returns the whole answer in one response, `{"answer": "...", "note": "..."}`. Clients keep follow-ups working the way the page does: send each earlier answer back in `history` as an `assistant` message with its `note` on the line before the answer.
 
 Answers about the organisation's or a person's risk, groups, top users, phishing tests or training completion come with the fitting chart automatically (charts are cheap: the data is already fetched). Ask for a chart ("tampilkan grafiknya", "show a chart") to get one for anything else. A CSV is made only when the question asks for one ("export", "CSV", "unduh"), never on its own initiative, and the answer then carries a download link. Charts are kept in `web\static\charts\` and CSV files in `exports\` for one hour, then deleted. A CSV is reachable only through its random 32-character link, opens in Excel with names intact (UTF-8 with BOM), and cells that start with `=`, `+`, `-` or `@` are prefixed so Excel does not run them as formulas.
 
@@ -281,7 +284,9 @@ Questions about NIST guidance are answered from the NIST library, with a **Sumbe
 
 **Periods.** Questions about a period ("dari 2026", "tahun lalu", "3 bulan terakhir", "Q3 2026", "since January", "antara Maret dan Juni 2026", "sebelum 2026") are read in code, not by the model, and the dates go to every tool that can filter: phishing tests, repeat clickers, one test in detail, training completion, overdue training (by enrolment date), risk trends, charts and CSV exports. The answer says the period it covers. **Without a period in the question, over-time data covers the past 12 months**, not everything since the account began; overdue training is the exception, because an unfinished enrolment from years ago is still overdue today. Rankings of people and groups are today's state, which KnowBe4 does not keep per period; the answer then says so. The model is also told today's date, so it never treats this year as the future.
 
-**Casual wording.** Chat spellings are spelled out before the model reads the question ("brp yg klik phising skrg" becomes "berapa yang klik phishing sekarang"). Short follow-ups that lean on the chat ("kalau grup?", "dia ada training yg telat?", "sama kayak tadi tapi buat tahun lalu") are understood from the earlier messages and the short notes kept with each answer. In a live test of 53 casual and dated questions (slang, typos, mixed Indonesian and English, vague follow-ups), the right data was used for 52 (the other used an admin health check, which is no longer offered to the chat model) and the right period reached the tools for all 17 dated ones. Restating follow-ups with an extra model call first was also tried: it was slower and got 3 of them wrong, so it is not used.
+**Casual wording.** Chat spellings, slang and less common words are spelled out before the model reads the question ("brp yg nunggak training" becomes "berapa yang terlambat training"), and typos of the words the bot works with are corrected ("trainnig yg terlmbat", "rsik scroe"). The corrector fixes one missing, extra or swapped letter, only towards the bot's own words, and leaves names, acronyms, links and real words alone; on the 3,505 distinct words of the NIST PDFs it changed none. Short follow-ups that lean on the chat ("kalau grup?", "dia ada training yg telat?", "sama kayak tadi tapi buat tahun lalu") are understood from the earlier messages and the short notes kept with each answer; "dia" right after a search that found several people gets "which one?" instead of a guess. In live tests, the right data was used for 53 of 53 casual and dated questions and 42 of 42 questions with slang, uncommon words and typos, and the right period reached the tools for all 19 dated ones. Restating follow-ups with an extra model call first was also tried: it was slower and got 3 of them wrong, so it is not used.
+
+Risk score answers start with a line built from the data (score and level now, the value 30 and 90 days ago, and the asked period's change), so the periods are never mixed up; "apa saja yang bisa kamu lakukan?" / "what can you do?" gets a fixed list of what the bot does.
 
 It also answers four kinds of question that need several KnowBe4 lists combined, all worked out in code:
 
@@ -290,7 +295,7 @@ It also answers four kinds of question that need several KnowBe4 lists combined,
 - **One phishing test in detail**: who failed and how, who reported it, and the report rate.
 - **Overdue training**: how many enrolments are Past Due, who has the most and which modules.
 
-[docs/DEMO.md](docs/DEMO.md) is a 10-minute demo script that shows every capability in order.
+[docs/DEMO.md](docs/DEMO.md) is a 12-minute demo script that shows every capability in order.
 
 Open:
 
@@ -317,6 +322,23 @@ Compare July 2026 training completion between main and subsidiary.
 ```
 
 The chat agent reaches KnowBe4 only through the MCP server's tools, the same ones any MCP-compatible host can use. `knowbe4_raw_get` is hidden from the chat model unless `LLM_EXPOSE_RAW_GET=true`. Local models are slower than cloud ones. On the 6 GB test laptop, answers took 6–37 seconds (about 17 on average) across eight typical questions; the page shows a running timer and gives up after 180 seconds.
+
+### Share the chat on the office network (optional)
+
+By default the chat only answers on this PC. To let colleagues on the same trusted network use it:
+
+1. Find this PC's address with `ipconfig` (the `IPv4 Address`, for example `192.168.1.20`).
+2. In `.env` set `WEB_HOST=0.0.0.0` and `WEB_ALLOWED_HOSTS=192.168.1.20` (add the PC name too if people use it), then restart `run_web.py`.
+3. In a PowerShell window opened with **Run as administrator**, allow the port on private networks only:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "KnowBe4 chat" -Direction Inbound -Protocol TCP -LocalPort 8080 -Profile Private -Action Allow
+   ```
+
+   Make sure Windows marks the office network as **Private** (Settings → Network & internet). Remove the rule later with `Remove-NetFirewallRule -DisplayName "KnowBe4 chat"`.
+4. Colleagues open `http://192.168.1.20:8080`.
+
+The chat has no login: anyone who can reach that address can ask about your KnowBe4 data. Only do this on a network you trust, never on public Wi-Fi. The MCP server stays on `127.0.0.1` either way.
 
 ## 9. Connect an MCP client (optional)
 

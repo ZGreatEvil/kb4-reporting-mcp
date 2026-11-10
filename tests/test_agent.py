@@ -1019,3 +1019,179 @@ async def test_dia_after_a_person_summary_fetches_that_person(monkeypatch):
                {"role": "assistant", "content": "[Data used: user_risk_summary Rina (id 7)]\n\n**Risk score Rina 47,09.**"}]
     await make_agent(make_config(monkeypatch), llm, session).ask("dia ada training yg telat ga?", history=history)
     assert session.calls == [("user_risk_summary", {"console": "main", "user_id": 7})]
+
+
+@pytest.mark.parametrize("prompt,language", [
+    ("Apa saja yang bisa kamu lakukan?", "id"), ("apa yg bisa kamu lakukan", "id"), ("kamu bisa apa aja sih?", "id"),
+    ("bisa bantu apa?", "id"), ("Halo, apa kemampuanmu?", "id"), ("fiturnya apa aja", "id"), ("bantuan", "id"),
+    ("kapabilitas anda apa", "id"), ("Apa kapabilitas anda?", "id"), ("kemampuan kamu apa saja?", "id"),
+    ("apa yang anda bisa?", "id"), ("apa saja yang kamu bisa lakukan", "id"), ("keahlianmu apa", "id"),
+    ("fungsi chatbot ini apa?", "id"), ("anda mampu apa?", "id"), ("apa aja fitur lo", "id"),
+    ("What can you do?", "en"), ("what r u capable of", "en"), ("What are your capabilities?", "en"), ("help", "en"),
+])
+async def test_capability_question_gets_the_fixed_list(monkeypatch, prompt, language):
+    # the model's own list opened with the off-topic line and named features that don't exist
+    llm = FakeLLM([])
+    session = FakeSession()
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask(prompt, language=language)
+    assert answer == msg("capabilities", language)
+    assert llm.requests == [] and session.calls == []
+
+
+@pytest.mark.parametrize("prompt", [
+    "apa yang bisa kamu lakukan untuk menurunkan risiko?", "apa yang bisa saya lakukan agar klik phishing turun?",
+    "bisa tampilkan risk score?", "help me reduce phishing clicks", "what can you tell me about the latest phishing test?",
+])
+async def test_questions_that_only_look_like_capability_questions_go_to_the_model(monkeypatch, prompt):
+    # guidance questions may get the nist nudge as well, hence two replies
+    llm = FakeLLM([reply("ok"), reply("ok")])
+    assert await make_agent(make_config(monkeypatch), llm, FakeSession()).ask(prompt) == "ok"
+    assert llm.requests
+
+
+def test_capability_list_has_no_features_the_bot_lacks():
+    for language in ("id", "en"):
+        text = msg("capabilities", language).lower()
+        assert not any(word in text for word in ("excel", "departemen", "department", "console", "konsol"))
+
+OVERVIEW = {
+    "current": {"score": 38.01, "level": "Low"},
+    "risk_trend": {
+        "current_score": 38.01, "current_level": "Low",
+        "change_vs_30_days_ago": {"from_score": 47.18, "change": -9.17},
+        "change_vs_90_days_ago": {"from_score": 46.81, "change": -8.8},
+    },
+    "period": {"period": "2026-08-09 to today", "snapshots": 13, "first_snapshot": {"date": "2026-08-10", "score": 46.81},
+               "last": {"date": "now", "score": 38.01}, "change": -8.8},
+}
+
+
+def risk_session():
+    session = FakeSession({"account_risk_overview": OVERVIEW})
+    session.tools.append(SimpleNamespace(name="account_risk_overview", description="d", input_schema={"type": "object"}))
+    return session
+
+
+async def test_risk_answer_first_line_comes_from_the_data(monkeypatch):
+    # the model once called the 30-day value "three months ago"
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "account_risk_overview", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Risk score 38.01 (Low), turun dari 47.18 tiga bulan lalu.**\n\n**Kenapa**\n- 18 orang gagal tes phishing."),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, risk_session()).ask("brp risk score skrg?")
+    first, rest = answer.split("\n", 1)
+    assert first == ("**Risk score organisasi sekarang 38,01 (Low); 30 hari lalu 47,18 (perubahan -9,17); "
+                     "90 hari lalu 46,81 (perubahan -8,8).**")
+    assert "tiga bulan" not in answer and "**Kenapa**" in rest
+
+
+async def test_risk_line_in_english_with_the_asked_period(monkeypatch):
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "account_risk_overview", '{"console": "main"}')], finish="tool_calls"),
+        reply("**The risk score is 38.01 (Low).**\n\nIt fell."),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, risk_session()).ask("risk score over the last 3 months", language="en")
+    first = answer.splitlines()[0]
+    assert first.startswith("**The organisation's risk score is 38.01 (Low) now; 30 days ago it was 47.18 (change -9.17)")
+    assert "from 46.81 on 2026-08-10 (change -8.8)" in first and " – today" in first
+
+
+async def test_risk_line_leaves_a_first_line_about_something_else(monkeypatch):
+    # a follow-up about training fetched the person's summary; its answer is about training, not the score
+    text = "**Rina punya 3 training yang terlambat.**\n\nRisk score 38.01."
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "account_risk_overview", '{"console": "main"}')], finish="tool_calls"),
+        reply(text),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, risk_session()).ask("training apa yang terlambat?")
+    assert answer.startswith("**Rina punya 3 training yang terlambat.**")
+
+async def test_risk_line_keeps_the_no_prediction_line_on_forecast_questions(monkeypatch):
+    refusal = f"**{msg('no_prediction', 'id')}** Risk score sekarang 38.01."
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "account_risk_overview", '{"console": "main"}')], finish="tool_calls"),
+        reply(refusal),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, risk_session()).ask("Berapa risk score bulan depan?")
+    assert answer.startswith(f"**{msg('no_prediction', 'id')}**")
+
+async def test_risk_body_sentence_with_the_wrong_period_is_removed(monkeypatch):
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "account_risk_overview", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Risk score 38.01.**\n\n- Turun dari 47,18 tiga bulan lalu. Ini bagus.\n- 30 hari lalu 47,18 dan 90 hari lalu 46,81."),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, risk_session()).ask("brp risk score skrg?")
+    assert "tiga bulan" not in answer
+    assert "- Ini bagus." in answer and "- 30 hari lalu 47,18 dan 90 hari lalu 46,81." in answer
+
+
+SEARCH_TWO = [
+    {"role": "user", "content": "cari andi"},
+    {"role": "assistant", "content": "[Data used: find_user 'andi': 1. Andi Wijaya (id 11), 2. Andi Saputra (id 12)]\n\nAda 2 orang."},
+]
+
+
+@pytest.mark.parametrize("prompt,language", [("berapa risk score dia?", "id"), ("what is her risk score?", "en")])
+async def test_pronoun_after_several_matches_asks_which_person(monkeypatch, prompt, language):
+    llm = FakeLLM([])
+    session = FakeSession()
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask(prompt, language, history=SEARCH_TWO)
+    assert answer.startswith(msg("which_person", language, count=2))
+    assert "1. Andi Wijaya\n2. Andi Saputra" in answer
+    assert llm.requests == [] and session.calls == []
+
+
+async def test_pronoun_after_a_picked_person_is_not_ambiguous(monkeypatch):
+    history = SEARCH_TWO + [
+        {"role": "user", "content": "1"},
+        {"role": "assistant", "content": "[Data used: user_risk_summary Andi Wijaya (id 11)]\n\n**Risk score Andi Wijaya 37,92.**"},
+    ]
+    llm = FakeLLM([reply("ok"), reply("ok")])
+    await make_agent(make_config(monkeypatch), llm, FakeSession()).ask("berapa risk score organisasinya?", history=history)
+    assert llm.requests
+
+TRAINING_ANSWER = [
+    {"role": "user", "content": "Bagaimana penyelesaian training?"},
+    {"role": "assistant", "content": "[Data used: training_completion_summary]\n\n**Rata-rata penyelesaian 18,14%.**"},
+]
+
+
+async def test_why_follow_up_fetches_the_data_again(monkeypatch):
+    # "yg 0% itu kenapa" once got a made-up reason without looking at the data
+    llm = FakeLLM([reply("**Karena kampanye itu baru.**"), reply("**0 dari 4 peserta menyelesaikannya.**")])
+    session = FakeSession({"training_completion_summary": {"campaigns": [{"name": "testing", "completion_percentage": 0, "enrolled": 4}]}})
+    session.tools.append(SimpleNamespace(name="training_completion_summary", description="d", input_schema={"type": "object"}))
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("yg 0% itu kenapa", history=TRAINING_ANSWER)
+    assert [c[0] for c in session.calls] == ["training_completion_summary"]
+    assert answer.startswith("**0 dari 4 peserta")
+
+
+async def test_why_without_an_earlier_data_note_is_left_to_the_model(monkeypatch):
+    llm = FakeLLM([reply("**Karena itu batas KnowBe4.**")])
+    session = FakeSession()
+    assert await make_agent(make_config(monkeypatch), llm, session).ask("kenapa level medium 41-47?") == "**Karena itu batas KnowBe4.**"
+    assert session.calls == []
+
+
+
+def test_find_note_tells_people_with_the_same_name_apart():
+    from agent.agent import _note_for
+
+    found = {"matches": [
+        {"id": 11, "name": "Andi Wijaya", "email": "andi.w@example.com", "status": "active"},
+        {"id": 12, "name": "Andi Wijaya", "email": "andi.wijaya@example.com", "status": "archived"},
+        {"id": 13, "name": "Andi Saputra", "email": "andi.s@example.com", "status": "active"},
+    ]}
+    note = _note_for("find_user", {"query": "andi"}, json.dumps(found))
+    assert note == ("find_user 'andi': 1. Andi Wijaya · andi.w@example.com (id 11), "
+                    "2. Andi Wijaya · andi.wijaya@example.com · archived (id 12), 3. Andi Saputra (id 13)")
+
+
+async def test_which_person_lists_the_detail_for_same_names(monkeypatch):
+    history = [
+        {"role": "user", "content": "cari andi"},
+        {"role": "assistant", "content": "[Data used: find_user 'andi': 1. Andi Wijaya · andi.w@example.com (id 11), "
+                                         "2. Andi Wijaya · andi.wijaya@example.com · archived (id 12)]\n\nAda 2 orang."},
+    ]
+    answer = await make_agent(make_config(monkeypatch), FakeLLM([]), FakeSession()).ask("berapa risk score dia?", history=history)
+    assert "1. Andi Wijaya · andi.w@example.com\n2. Andi Wijaya · andi.wijaya@example.com · archived" in answer

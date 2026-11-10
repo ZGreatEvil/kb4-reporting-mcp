@@ -113,10 +113,19 @@ def test_chat_errors_never_leak_exception_text(client, monkeypatch):
     async def broken(*a, **k):
         raise RuntimeError("secret internals")
 
-    monkeypatch.setattr(main.AGENT, "ask", broken)
+    monkeypatch.setattr(main.AGENT, "ask_with_note", broken)
     body = client.post("/api/chat", json={"message": "hi"}).json()
     assert body["answer"] == main.msg("pipeline_error", "id")
     assert "secret" not in json.dumps(body)
+
+
+def test_plain_chat_returns_the_note_like_the_stream(client, monkeypatch):
+    # without the note, "2" and "lanjut" could not be resolved by api clients
+    async def answer(*a, **k):
+        return {"answer": "**Ok.**", "note": "[Data used: account_risk_overview]"}
+
+    monkeypatch.setattr(main.AGENT, "ask_with_note", answer)
+    assert client.post("/api/chat", json={"message": "hi"}).json() == {"answer": "**Ok.**", "note": "[Data used: account_risk_overview]"}
 
 
 @pytest.mark.parametrize("name,wanted,same", [

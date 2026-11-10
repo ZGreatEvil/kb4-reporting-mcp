@@ -111,6 +111,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "id": "Panggil list_users_page dengan offset={offset} sekarang, lalu tampilkan user tersebut dalam tabel. Jangan pakai data dari pesan sebelumnya.",
         "en": "Call list_users_page with offset={offset} now, then show those users in a table. Do not reuse data from earlier messages.",
     },
+    "call_again": {
+        "id": "Alasannya harus dari data. Panggil {tool} sekarang, lalu jelaskan hanya dari hasilnya; jangan menebak penyebab yang tidak ada di data.",
+        "en": "The reason must come from the data. Call {tool} now, then explain only from its result; do not guess causes the data does not show.",
+    },
     "call_user_summary": {
         "id": "Panggil user_risk_summary dengan user_id={id} sekarang, lalu jawab dari hasilnya.",
         "en": "Call user_risk_summary with user_id={id} now, then answer from its result.",
@@ -167,9 +171,91 @@ MESSAGES: dict[str, dict[str, str]] = {
         "id": "Yang mana yang Anda maksud?",
         "en": "Which one do you mean?",
     },
+    "which_person": {
+        "id": "**Ada {count} orang dengan nama itu. Yang mana yang Anda maksud?** Ketik nomornya.",
+        "en": "**{count} people have that name. Which one do you mean?** Type their number.",
+    },
     "answer_in_language": {
         "id": "Jawab dalam Bahasa Indonesia.",
         "en": "Answer in English.",
+    },
+    # the first line of a risk score answer, built from the data
+    "risk_line": {
+        "id": "Risk score {subject} sekarang {score} ({level}); {then}.",
+        "en": "{subject} risk score is {score} ({level}) now; {then}.",
+    },
+    "risk_subject_org": {
+        "id": "organisasi",
+        "en": "The organisation's",
+    },
+    "risk_subject_person": {
+        "id": "{name}",
+        "en": "{name}'s",
+    },
+    "risk_then": {
+        "id": "{days} hari lalu {score} (perubahan {change})",
+        "en": "{days} days ago it was {score} (change {change})",
+    },
+    "risk_then_missing": {
+        "id": "tidak ada data dari {days} hari lalu",
+        "en": "no data from {days} days ago",
+    },
+    "risk_period": {
+        "id": "periode {period}: dari {score} pada {date} (perubahan {change})",
+        "en": "over {period}: from {score} on {date} (change {change})",
+    },
+    "period_data_start": {
+        "id": "awal data",
+        "en": "the start of the data",
+    },
+    "period_today": {
+        "id": "sekarang",
+        "en": "today",
+    },
+    "risk_period_missing": {
+        "id": "tidak ada data pada periode {period}",
+        "en": "no data from {period}",
+    },
+    # only what the bot really does; keep in step with the tools when they change
+    "capabilities": {
+        "id": (
+            "**Saya membaca data KnowBe4 organisasi Anda dan memberi panduan security awareness.**\n\n"
+            "Yang bisa saya lakukan:\n"
+            "- **Risk score:** risk score organisasi sekarang, levelnya, perubahannya dalam 30 dan 90 hari, dan alasannya.\n"
+            "- **Pengguna dan grup:** pengguna dan grup paling berisiko, mencari orang berdasarkan nama atau email, dan riwayat risk score seseorang.\n"
+            "- **Phishing:** hasil tes phishing, siapa yang klik dan siapa yang melaporkan, siapa yang gagal lebih dari sekali, dan phish-prone % dibanding benchmark KnowBe4.\n"
+            "- **Training:** penyelesaian training campaign dan training yang lewat tenggat.\n"
+            "- **Periode:** sebutkan periode seperti \"dari 2026\" atau \"3 bulan terakhir\". Tanpa periode, saya memakai 12 bulan terakhir.\n"
+            "- **Grafik dan CSV:** grafik muncul sendiri bila membantu. File CSV saya buat bila Anda memintanya.\n"
+            "- **Panduan NIST:** cara menjalankan, mengukur dan meningkatkan program awareness dan simulasi phishing, dengan sumber dari dokumen NIST.\n\n"
+            "Yang tidak bisa saya lakukan: mengubah atau menghapus data (saya hanya membaca), memprediksi nilai di masa depan, "
+            "dan menjawab pertanyaan di luar KnowBe4 dan security awareness.\n\n"
+            "Contoh pertanyaan:\n"
+            "- Berapa risk score sekarang, dan kenapa?\n"
+            "- Siapa 10 pengguna paling berisiko?\n"
+            "- Siapa yang klik email phishing terakhir?\n"
+            "- Training apa saja yang lewat tenggat?\n"
+            "- Bagaimana cara mengukur efektivitas training security awareness?"
+        ),
+        "en": (
+            "**I read your organisation's KnowBe4 data and give security awareness guidance.**\n\n"
+            "What I can do:\n"
+            "- **Risk score:** the organisation's current risk score, its level, how it changed over 30 and 90 days, and why.\n"
+            "- **Users and groups:** the riskiest users and groups, finding a person by name or email, and a person's risk score history.\n"
+            "- **Phishing:** phishing test results, who clicked and who reported, who failed more than once, and the phish-prone % against KnowBe4's benchmark.\n"
+            "- **Training:** training campaign completion and overdue training.\n"
+            "- **Periods:** name a period such as \"since 2026\" or \"the last 3 months\". Without one, I use the past 12 months.\n"
+            "- **Charts and CSV:** charts appear on their own when they help. I make a CSV file when you ask for one.\n"
+            "- **NIST guidance:** how to run, measure and improve awareness programmes and phishing simulations, with sources from NIST documents.\n\n"
+            "What I can't do: change or delete data (I only read it), predict future values, "
+            "or answer questions outside KnowBe4 and security awareness.\n\n"
+            "Example questions:\n"
+            "- What is the risk score now, and why?\n"
+            "- Who are the 10 riskiest users?\n"
+            "- Who clicked the latest phishing email?\n"
+            "- Which training is overdue?\n"
+            "- How can we measure how effective security awareness training is?"
+        ),
     },
     "mcp_transport": {
         "id": "Layanan data KnowBe4 (server MCP) tidak dapat dihubungi. Coba lagi sebentar lagi. Admin: pastikan run_mcp.py berjalan.",

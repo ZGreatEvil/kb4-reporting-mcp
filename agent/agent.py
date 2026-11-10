@@ -3,6 +3,7 @@ from __future__ import annotations
 import bisect
 import json
 import re
+from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import date
 from types import SimpleNamespace
@@ -13,7 +14,7 @@ from mcp.client.streamable_http import streamable_http_client
 
 from agent.llm import LLMClient
 from agent.messages import DEFAULT_LANGUAGE, LANGUAGE_NAMES, msg
-from agent.normalise import normalise
+from agent.normalise import normalise_with_fixes
 from agent.period import default_period, parse_period
 from config.settings import AppConfig, load_config
 
@@ -162,7 +163,19 @@ def _note_for(name: str, args: dict[str, Any], text: str) -> str:
     if isinstance(data, dict) and name == "list_users_page":
         return f"list_users_page sort={data.get('sort')} showing {data.get('showing')} next_offset={data.get('next_offset')}"
     if isinstance(data, dict) and name == "find_user":
-        people = ", ".join(f"{i + 1}. {m.get('name')} (id {m.get('id')})" for i, m in enumerate(data.get("matches") or []))
+        matches = data.get("matches") or []
+        names = Counter(m.get("name") for m in matches)
+
+        def who(m: dict[str, Any]) -> str:
+            # two people with the same full name were listed identically in "which one?"
+            if names[m.get("name")] < 2:
+                return str(m.get("name"))
+            extra = [str(m.get("email") or m.get("department") or m.get("job_title") or "")]
+            if m.get("status") and m.get("status") != "active":
+                extra.append(str(m.get("status")))
+            return " · ".join([str(m.get("name")), *(e.replace(",", " ") for e in extra if e)])
+
+        people = ", ".join(f"{i + 1}. {who(m)} (id {m.get('id')})" for i, m in enumerate(matches))
         return f"find_user '{args.get('query')}': {people or 'no matches'}"
     if isinstance(data, dict) and name == "user_risk_summary":
         user = data.get("user") or {}
@@ -197,6 +210,75 @@ def _with_users_table(answer: str, page: dict[str, Any], language: str) -> str:
     if page.get("next_offset") is not None:
         text += "\n\n" + msg("users_page_more", language)
     return text.strip()
+
+
+RISK_WORDS = re.compile(r"\b(risk|risiko|skor|score)\b", re.I)
+PERIOD_30 = re.compile(r"\b(30 hari|sebulan|satu bulan|1 bulan|30 days|a month|one month|last month)\b", re.I)
+PERIOD_90 = re.compile(r"\b(90 hari|tiga bulan|3 bulan|90 days|three months|3 months|quarter|kuartal)\b", re.I)
+
+
+def _with_risk_line(answer: str, summary: dict[str, Any], language: str, asked_period: Any = None) -> str:
+    """the risk score answer's first line, from the data: the model once called the 30-day value "three months ago".
+    only replaces a first line about the risk score, so "dia ada training yg telat?" keeps its own"""
+    trend = summary.get("risk_trend") or {}
+    current = summary.get("current") or {}
+    score = current.get("score", trend.get("current_score"))
+    level = current.get("level", trend.get("current_level"))
+    if score is None:
+        return answer
+    lines = answer.splitlines()
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    if first is None or not lines[first].lstrip().startswith("**") or not RISK_WORDS.search(lines[first]):
+        return answer
+
+    def num(value: Any) -> str:
+        text = f"{value}"
+        return text.replace(".", ",") if language == "id" else text
+
+    person = (summary.get("user") or {}).get("name")
+    subject = msg("risk_subject_person", language, name=person) if person else msg("risk_subject_org", language)
+    parts = []
+    for days in (30, 90):
+        c = trend.get(f"change_vs_{days}_days_ago")
+        if c:
+            parts.append(msg("risk_then", language, days=days, score=num(c["from_score"]), change=num(f"{c['change']:+}")))
+        else:
+            parts.append(msg("risk_then_missing", language, days=days))
+    period = summary.get("period")
+    if asked_period is not None and isinstance(period, dict):
+        # the summary's label is english; this one follows the chat
+        start = asked_period.start.isoformat() if asked_period.start else msg("period_data_start", language)
+        end = asked_period.end.isoformat() if asked_period.end else msg("period_today", language)
+        label = f"{start} – {end}"
+        if period.get("snapshots"):
+            parts.append(msg("risk_period", language, period=label, score=num(period["first_snapshot"]["score"]),
+                             date=period["first_snapshot"]["date"], change=num(f"{period['change']:+}")))
+        else:
+            parts.append(msg("risk_period_missing", language, period=label))
+    line = msg("risk_line", language, subject=subject, score=num(score), level=level, then="; ".join(parts))
+    lines[first] = f"**{line}**"
+    # the body may still put a value under the other period ("47,18 tiga bulan lalu"): those sentences go,
+    # the first line already has both right
+    values = {d: (trend.get(f"change_vs_{d}_days_ago") or {}).get("from_score") for d in (30, 90)}
+
+    def mentions(sentence: str, value: Any) -> bool:
+        return value is not None and any(v in sentence for v in {f"{value}", f"{value}".replace(".", ",")})
+
+    def wrong(sentence: str) -> bool:
+        return (mentions(sentence, values[30]) and PERIOD_90.search(sentence) and not mentions(sentence, values[90])) or (
+            mentions(sentence, values[90]) and PERIOD_30.search(sentence) and not mentions(sentence, values[30]))
+
+    body = []
+    for ln in lines[first + 1:]:
+        marker = re.match(r"\s*(?:[-*]|\d+\.)\s+", ln)
+        lead = marker.group(0) if marker else ""
+        sentences = re.split(r"(?<=[.!?])\s+", ln[len(lead):])
+        kept = [s for s in sentences if not wrong(s)]
+        if len(kept) == len(sentences):
+            body.append(ln)
+        elif kept:
+            body.append(lead + " ".join(kept))
+    return "\n".join([*lines[: first + 1], *body])
 
 
 # a number as written, not glued to letters ("KnowBe4") or other digits; "2.233", "39,4", "1,234.5"
@@ -298,6 +380,17 @@ PICK = re.compile(r"^\s*(?:no\.?|nomor|number|#)?\s*(\d{1,2})\s*[.!?]?\s*$|\byan
 ORDINALS = {"pertama": 1, "kedua": 2, "ketiga": 3, "keempat": 4, "kelima": 5}
 # "1. Rina Sari (id 100000001), 2. Rina Putri (id 100000002)" inside a find_user note
 LISTED_PEOPLE = re.compile(r"(\d+)\. [^,;\]]*?\(id (\d+)\)")
+WHY_ASK = re.compile(r"\b(kenapa|mengapa|why|alasan\w*|penyebab\w*)\b", re.I)
+# the first tool of the last [Data used: ...] note: what a "why" follow-up is about
+LAST_NOTE_TOOL = re.compile(r"\[Data used: (\w+)")
+# summaries that need nothing but the console, so they can be fetched again as they are
+REFETCH_TOOLS = {
+    "account_risk_overview", "training_completion_summary", "phishing_campaign_summary", "overdue_training",
+    "risk_by_group", "top_users_by_risk", "repeat_phishing_failures", "phishing_test_detail",
+}
+NAMED_PEOPLE = re.compile(r"(\d+)\. ([^,;\]]*?) \(id (\d+)\)")
+# a person referred to, not "-nya" on any word ("organisasinya")
+PERSON_PRONOUN = re.compile(r"\b(dia|beliau|orang itu|orangnya|he|she|him|her|his)\b", re.I)
 # who reported a phishing email ("yg report brp", "berapa yang melaporkan", "report rate")
 # questions about the future, where the "cannot predict" line belongs
 FUTURE_ASK = re.compile(
@@ -318,6 +411,23 @@ GUIDANCE_ASK = re.compile(
 )
 AWARENESS_TOPIC = re.compile(
     r"\b(training|pelatihan|awareness|kesadaran|phishing|simulasi|simulation|program|karyawan|employees?|staff|keamanan|security|risiko|risk|klik|click)\w*",
+    re.I,
+)
+# "apa saja yang bisa kamu lakukan?" / "what can you do?": the whole question, so "apa yang bisa kamu lakukan untuk
+# menurunkan risiko" still goes to the model. the model's own version opened with the off-topic line and listed
+# features that don't exist (excel, departments, several consoles), so the answer is fixed text
+CAPABILITY_ASK = re.compile(
+    r"^\W*(?:(?:hai|halo|hello|hi|hey)\W+)?(?:"
+    r"(?:apa\s+(?:saja\s+)?)?(?:yang\s+)?(?:bisa|dapat)\s+(?:kamu|anda|kau|lo|lu|bot\s+ini|chatbot\s+ini)\s+(?:lakukan|bantu|kerjakan)"
+    r"|apa\s+(?:saja\s+)?(?:yang\s+)?(?:kamu|anda|kau|lo|lu)\s+(?:bisa|dapat|mampu)(?:\s+(?:lakukan|bantu|kerjakan))?"
+    r"|(?:kamu|anda|kau|lo|lu)?\s*(?:bisa|dapat|mampu)\s+(?:bantu\s+)?(?:apa|ngapain)"
+    r"|(?:apa\s+(?:saja\s+)?)?(?:fitur|kemampuan|kapabilitas|keahlian|fungsi)(?:mu|nya|\s+(?:kamu|anda|kau|lo|lu|bot\s+ini|chatbot\s+ini))?(?:\s+apa)?"
+    r"|what\s+(?:can|could)\s+(?:you|this\s+bot)\s+(?:do|help\s+(?:me\s+)?with)"
+    r"|what\s+are\s+you\s+(?:capable|able)\s+of(?:\s+doing)?"
+    r"|what\s+do\s+you\s+do"
+    r"|(?:what\s+are\s+)?your\s+(?:capabilit(?:y|ies)|features|skills)"
+    r"|capabilit(?:y|ies)|help|bantuan|menu"
+    r")(?:\s+(?:saja|sih|ya|dong|ini|itu|nya|for\s+me|untuk\s+saya|buat\s+saya))*\W*$",
     re.I,
 )
 # tools that take start_date / end_date; the question's period is put into their arguments
@@ -549,6 +659,13 @@ class Agent:
                     state.setdefault("attachments", []).append(made)
         if name == "user_risk_summary" and not getattr(result, "is_error", False):
             state["summary_user_id"] = args.get("user_id")
+        if name in ("account_risk_overview", "user_risk_summary") and not getattr(result, "is_error", False):
+            try:
+                summary = json.loads(text)
+            except ValueError:
+                summary = None
+            if isinstance(summary, dict) and isinstance(summary.get("risk_trend"), dict):
+                state.setdefault("risk_summaries", []).append(summary)
         if name == "find_user":
             try:
                 found = json.loads(text)
@@ -571,11 +688,17 @@ class Agent:
         return self._truncate(text)
 
     async def ask(self, prompt: str, language: str = DEFAULT_LANGUAGE, history: list[dict[str, Any]] | None = None) -> str:
-        answer = ""
+        return (await self.ask_with_note(prompt, language, history))["answer"]
+
+    async def ask_with_note(
+        self, prompt: str, language: str = DEFAULT_LANGUAGE, history: list[dict[str, Any]] | None = None
+    ) -> dict[str, str]:
+        """the answer and its [Data used: ...] note, which the caller sends back with the history (as the page does)"""
+        done = {"answer": "", "note": ""}
         async for event in self._events(prompt, language, stream=False, history=history):
             if event["type"] == "done":
-                answer = event["answer"]
-        return answer
+                done = {"answer": event["answer"], "note": event.get("note") or ""}
+        return done
 
     async def ask_stream(
         self, prompt: str, language: str = DEFAULT_LANGUAGE, history: list[dict[str, Any]] | None = None
@@ -626,9 +749,15 @@ class Agent:
             yield {"type": "done", "answer": msg("empty_question", language)}
             return
         # "brp yg klik" -> "berapa yang klik": the small model and the patterns below read plain words better
-        prompt = normalise(prompt)
+        prompt, typo_fixes = normalise_with_fixes(prompt)
 
         print(f"[AGENT] User question received ({len(prompt)} chars, language={language}, stream={stream})", flush=True)
+        if typo_fixes:
+            print("[AGENT] Typos corrected: " + ", ".join(f"{a} -> {b}" for a, b in typo_fixes), flush=True)
+        if CAPABILITY_ASK.search(prompt):
+            print("[AGENT] Capability question, answering with the fixed list", flush=True)
+            yield {"type": "done", "answer": msg("capabilities", language), "note": ""}
+            return
         max_loops = self.config.llm_max_tool_loops
 
         async with self._session_factory() as session:
@@ -660,6 +789,15 @@ class Agent:
                 if number in ids:
                     state["single_match_id"] = int(ids[number])
                     state["picked"] = True
+            # "berapa risk score dia?" right after a search that found several people: it once picked one by itself
+            if not state.get("picked") and PERSON_PRONOUN.search(prompt):
+                found_at, summary_at = earlier_notes.rfind("find_user"), earlier_notes.rfind("user_risk_summary")
+                listed = NAMED_PEOPLE.findall(earlier_notes[found_at:]) if found_at > summary_at else []
+                if len(listed) >= 2:
+                    print("[AGENT] 'dia' after several matches, asking which person", flush=True)
+                    people = "\n".join(f"{n}. {name.strip()}" for n, name, _ in listed)
+                    yield {"type": "done", "answer": msg("which_person", language, count=len(listed)) + "\n\n" + people, "note": ""}
+                    return
             # only about users: "kenapa 41-47 disebut medium" is not a page request
             if (r := RANGE.search(prompt)) and 0 < int(r.group(1)) <= int(r.group(2)) and (offsets or USERS_WORD.search(prompt)):
                 state["range"] = (int(r.group(1)), int(r.group(2)))
@@ -734,6 +872,11 @@ class Agent:
                             # "terus yg report brp?" once got the previous answer repeated; only this tool knows who reported
                             exact = msg("call_report", language)
                             call = ("phishing_test_detail", {"console": console})
+                        elif (WHY_ASK.search(prompt) and not state.get("data_tools")
+                              and (last := LAST_NOTE_TOOL.findall(earlier_notes)) and last[-1] in REFETCH_TOOLS):
+                            # "yg 0% itu kenapa" once got a reason made up without looking at the data again
+                            exact = msg("call_again", language, tool=last[-1])
+                            call = (last[-1], {"console": console})
                         elif (person := state.get("single_match_id") or (state.get("last_person_id") if PRONOUN.search(prompt) else None)) \
                                 and not state.get("user_risk_summary") and (state.get("picked") or PERSON_DETAIL_ASK.search(prompt)):
                             # "dia ada training yg telat?" once got a users list instead of that person
@@ -828,6 +971,9 @@ class Agent:
                         answer += "\n\n" + msg("cut_off", language)
                     # the notes are for the model only
                     answer = NOTE_LINE.sub("", answer).strip()
+                    # a forecast question opens with the no-prediction line, which mentions the risk score too
+                    if len(state.get("risk_summaries") or []) == 1 and not state.get("users_page") and not FUTURE_ASK.search(prompt):
+                        answer = _with_risk_line(answer, state["risk_summaries"][0], language, asked_period=None if state.get("default_period") else state.get("period"))
                     if state.get("ask_user") and "?" not in answer:
                         answer += "\n\n" + msg("which_one", language)
                     if state.get("users_page"):

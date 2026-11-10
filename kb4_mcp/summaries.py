@@ -743,7 +743,8 @@ async def overdue_training(
         "headline": (
             f"{'Enrolled from ' + period + ': ' if period else ''}"
             f"{len(overdue)} of {len(enrollments)} training enrolments ({_pct(len(overdue), len(enrollments))}%) are Past Due, "
-            f"held by {len(people)} people; {people[0]['name']} has the most ({people[0]['past_due']})."
+            # "held by" came out as "ditahan oleh" (detained by) in indonesian answers
+            f"and {len(people)} people have at least one; {people[0]['name']} has the most ({people[0]['past_due']})."
             if people else f"None of the {len(enrollments)} training enrolments is Past Due."
         ),
         "period": f"enrolled {period}" if period else "all enrolments",

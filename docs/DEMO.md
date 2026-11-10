@@ -11,6 +11,12 @@ Before the demo:
 
 Answers take roughly 5–30 seconds; the page shows what the bot is doing ("Berpikir…", "Mengambil data: …") and, afterwards, how long it took.
 
+## 0. What it can do
+
+| # | Prompt | What the audience should see |
+| --- | --- | --- |
+| 0 | Apa saja yang bisa kamu lakukan? | A fixed list of what the bot does (risk, users and groups, phishing, training, periods, charts and CSV, NIST guidance), what it doesn't do, and five example questions. It appears straight away, without the model. |
+
 ## 1. Live data, explained
 
 | # | Prompt | What the audience should see |
@@ -88,6 +94,7 @@ Switch the header to **EN**, then:
 
 | # | Prompt | What the audience should see |
 | --- | --- | --- |
+| 23a | What can you do? | The same fixed list, in English. |
 | 24 | How does our average phish-prone percentage compare with KnowBe4's benchmark, and what does NIST recommend for phishing simulations? | Our figure compared with KnowBe4's 2026 benchmark (worked out in code), plus NIST guidance with sources, in English. |
 | 25 | Export the phishing test results as a CSV file. | A **⬇ Download CSV** link. |
 

@@ -25,4 +25,6 @@ Every time
 2. Terminal 1:            .\.venv\Scripts\python.exe run_mcp.py
 3. Terminal 2:            .\.venv\Scripts\python.exe run_web.py
 4. Open                   http://127.0.0.1:8080
+   First question:        Apa saja yang bisa kamu lakukan?   (lists what the bot does)
    Demo script:           docs\DEMO.md
+   Office network:        README section 8, "Share the chat on the office network" (trusted networks only, no login)

@@ -5,6 +5,10 @@ All notable changes to this project are listed here. Dates are in YYYY-MM-DD for
 ## [Unreleased]
 
 ### Added
+- README: how to share the chat on the office network (`WEB_HOST`, `WEB_ALLOWED_HOSTS`, a firewall rule for private networks), and the newer abilities in "What is included".
+- Risk score answers start with a line built from the data: the score and level now, the value 30 and 90 days ago with the change, and the asked period's change when a period was named, in the chat's language. An answer once called the 30-day value "three months ago". Answers whose first line is about something else (a person's overdue training) or that refuse a forecast keep their own. Sentences further down that put the 30-day value under "three months" (or the other way round) are removed.
+- Typos and uncommon words: misspellings of the words the bot works with are corrected before anything reads the question ("trainnig yg terlmbat" → "training yang terlambat", "rsik scroe" → "risk score", "phisingnya" → "phishingnya"), and more slang and less common words are spelled out ("nunggak", "molor", "jatuh tempo", "kecolongan", "kejebak", "rawan", "pegawai", "gw", "kpn", "nurunin", "ppl", "whats"). The corrector only fixes one missing, extra or swapped letter (two from 10 letters), only towards the bot's own words, and leaves names, acronyms, links, emails and real words with endings alone; on the 3,505 distinct words of the NIST PDFs it changed none.
+- "Apa saja yang bisa kamu lakukan?", "kamu bisa apa aja?", "What can you do?" and similar get a fixed list of what the bot does and doesn't do, with example questions, in the chosen language. The model's own list opened like an off-topic refusal and offered features that don't exist (Excel export, departments, several consoles). Questions that only start that way ("apa yang bisa kamu lakukan untuk menurunkan risiko?") still go to the model.
 - Periods: "dari 2026", "tahun lalu", "3 bulan terakhir", "Q3 2026", "since January", "antara Maret dan Juni 2026" and similar are worked out in code (`agent/period.py`) and given to every tool that can filter by date, including charts and CSV exports; answers state the period. Before, only training questions kept their dates (2 of 16 period questions in the test set); a question about 2026 came back with data from 2024.
 - Casual wording: chat spellings and common misspellings are spelled out before the model reads the question (`agent/normalise.py`). In a live test of 53 casual and dated questions, the right data was used for 52 (the 53rd, which used an admin health check, is fixed: that tool is no longer offered to the chat model) and the right period reached the tools for 17 of 17 (before: 2 of 16). Restating follow-ups with an extra model call was tried and dropped: slower, and 3 more wrong.
 - The model is told today's date (it called 2026 "the future").
@@ -52,6 +56,11 @@ All notable changes to this project are listed here. Dates are in YYYY-MM-DD for
 - The "Pertanyaan berikutnya / Next question" suggestion at the end of answers is gone.
 
 ### Fixed
+- People with the same full name are told apart in search results and in "which one?" by their email, and "archived" when they are; they used to be listed identically.
+- A "why" follow-up ("yg 0% itu kenapa") answered without looking at the data again now fetches the summary the previous answer used, so the reason comes from the data instead of a guess (seen once in four live runs).
+- "dia", "him", "her" right after a search that found several people get "which one?" with the numbered list again, instead of an answer about whichever person the model picked.
+- `POST /api/chat` returns the `[Data used: ...]` note as `note`, as the streaming endpoint does, so API clients can keep "2" and "lanjut" working.
+- The overdue training summary says "N people have at least one" instead of "held by N people", which came out as "ditahan oleh" (detained by) in Indonesian.
 - Questions without a period no longer pull data from the beginning of the account: over-time data (risk trends, phishing tests, training campaigns, charts, exports) covers the past 12 months unless the question says otherwise.
 - Answers no longer vanish and reappear: the page shows progress until the answer is final, then the whole answer with its chart at once. Queued questions were checked live and are sent exactly once.
 - Guidance questions ("bagaimana cara mengukur efektivitas training?") use the NIST library without having to mention NIST.

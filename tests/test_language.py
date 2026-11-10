@@ -82,9 +82,9 @@ def client(monkeypatch):
         seen["language"] = language
         if message == "boom":
             raise LLMError("llm_unreachable", url="http://x")
-        return f"ok:{language}"
+        return {"answer": f"ok:{language}", "note": ""}
 
-    monkeypatch.setattr(web_main.AGENT, "ask", fake_ask)
+    monkeypatch.setattr(web_main.AGENT, "ask_with_note", fake_ask)
     return TestClient(web_main.app), seen
 
 

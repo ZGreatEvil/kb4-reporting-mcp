@@ -321,15 +321,12 @@ async def chat(
 
     try:
 
-        answer = await AGENT.ask(
+        # the note goes back with the history, so "2" and "lanjut" work here as they do on the page
+        return await AGENT.ask_with_note(
             message,
             language,
             [h.model_dump() for h in req.history],
         )
-
-        return {
-            "answer": answer,
-        }
 
     except LLMError as exc:
 
