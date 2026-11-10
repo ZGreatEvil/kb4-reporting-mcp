@@ -18,7 +18,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from agent.agent import Agent
 from agent.llm import LLMError
 from agent.messages import DEFAULT_LANGUAGE, Language, msg
-from config.settings import load_config
+from config.settings import PRODUCTS, load_config
 from kb4_mcp.outputs import CHART_DIR, EXPORT_DIR, KEEP_SECONDS, _cleanup
 
 try:
@@ -263,6 +263,11 @@ async def health():
         "consoles": list(
             CONFIG.consoles.keys()
         ),
+        # which optional product api keys each console has (names only, no request)
+        "product_apis": {
+            key: [p for p in PRODUCTS if console.product_key(p)]
+            for key, console in CONFIG.consoles.items()
+        },
     }
 
 

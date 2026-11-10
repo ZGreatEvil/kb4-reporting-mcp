@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from config.settings import AppConfig
@@ -455,6 +455,10 @@ async def training_completion_summary(
     campaigns.sort(key=lambda c: str(c.get("start_date") or ""), reverse=True)
     shown = campaigns[: _limit(limit)]
     rates = [c["completion_percentage"] for c in campaigns if isinstance(c.get("completion_percentage"), (int, float))]
+    # the model made up why a campaign sat at 0% ("those are phishing tests"); the enrolment statuses say why
+    statuses: dict[Any, Counter] = {}
+    for e in await kb.list_training_enrollments(console, exclude_archived_users=True, include_campaign_id=True):
+        statuses.setdefault(e.get("campaign_id"), Counter())[str(e.get("status") or "unknown")] += 1
     return {
         "console": console,
         "filters": {"campaign_id": campaign_id, "start_date": start_date, "end_date": end_date},
@@ -468,10 +472,13 @@ async def training_completion_summary(
                 "start_date": _date(c.get("start_date")),
                 "end_date": _date(c.get("end_date")),
                 "completion_percentage": c.get("completion_percentage"),
+                "enrolments_by_status": dict(statuses.get(c.get("campaign_id"), {})),
             }
             for c in shown
         ],
         "order": "newest start_date first",
+        "note": ("A campaign's completion % comes from its enrolments: enrolments_by_status shows how many passed, are Past Due, "
+                 "not started or in progress (current users). Explain a completion % only from these counts; do not guess other reasons."),
     }
 
 
@@ -520,6 +527,18 @@ NO_ADVICE = "Start from the headline. Report only these facts; do not add advice
 
 def _failures(recipient: dict[str, Any]) -> list[str]:
     return [label for field, label in FAILURE_EVENTS.items() if recipient.get(field)]
+
+
+def _minutes_to_fail(recipient: dict[str, Any]) -> float | None:
+    """delivered -> first failure, in minutes; None when either time is missing or unreadable"""
+    try:
+        delivered = datetime.fromisoformat(str(recipient.get("delivered_at")))
+        times = [datetime.fromisoformat(str(recipient[f])) for f in FAILURE_EVENTS if recipient.get(f)]
+    except ValueError:
+        return None
+    if not times:
+        return None
+    return max(0.0, (min(times) - delivered).total_seconds() / 60)
 
 
 def _recipient_name(recipient: dict[str, Any]) -> str:
@@ -692,6 +711,8 @@ async def phishing_test_detail(
     failed = [r for r in delivered if _failures(r)]
     reported = [r for r in delivered if r.get("reported_at")]
     events = {label: sum(1 for r in delivered if r.get(field)) for field, label in FAILURE_EVENTS.items()}
+    speeds = sorted(m for r in failed if (m := _minutes_to_fail(r)) is not None)
+    opened_only = [r for r in delivered if r.get("opened_at") and not _failures(r) and not r.get("reported_at")]
     return {
         "console": console,
         "headline": (
@@ -713,6 +734,16 @@ async def phishing_test_detail(
         "reported": len(reported),
         "report_rate_percent": _pct(len(reported), len(delivered)),
         "report_rate_note": "Report rate = people who reported the email (Phish Alert Button) / emails delivered. Higher is better.",
+        "speed_of_failure": {
+            "people_timed": len(speeds),
+            "fastest_minutes": round(speeds[0], 1) if speeds else None,
+            "median_minutes": round(_median(speeds), 1) if speeds else None,
+            "within_10_minutes": sum(1 for m in speeds if m <= 10),
+            "within_1_hour": sum(1 for m in speeds if m <= 60),
+            "meaning": "minutes from the email being delivered to the person's first failure",
+        },
+        "opened_but_did_nothing": len(opened_only),
+        "bounced": sum(1 for r in recipients if r.get("bounced_at")),
         "failed_people": [
             {"name": _recipient_name(r), "what_they_did": _failures(r), "also_reported": bool(r.get("reported_at"))}
             for r in failed[: max(1, min(int(limit or 20), MAX_LIMIT))]
@@ -756,4 +787,420 @@ async def overdue_training(
         "most_overdue_people": [{"rank": i + 1, **p} for i, p in enumerate(people[: _limit(limit)])],
         "most_overdue_modules": [{"module": m, "past_due": n} for m, n in modules.most_common(_limit(limit))],
         "note": "Past Due = the due date has passed without the training being completed. Archived users are left out. " + NO_ADVICE,
+    }
+
+
+# enrolment statuses seen live (Nov 2026): Passed, Past Due, Not Started, In Progress
+DONE_STATUSES = {"Passed", "Completed"}
+# time_spent has no unit in KnowBe4's docs; against 4-10 minute modules the values only make sense as seconds
+TIME_SPENT_NOTE = "KnowBe4's docs give time_spent without a unit; the values match seconds, so minutes = time_spent / 60."
+MODULE_SORTS = ("least_completed", "most_overdue", "most_enrolled", "most_completed", "longest")
+
+
+# "The Inside Man: Season 1 Ep 01 - The New Guy" -> "The Inside Man: Season 1"
+EPISODE = re.compile(r"\s*(?:[-:–]\s*)?\b(?:Ep(?:isode)?\.?|Part|Bagian)\s*\d+\b.*$", re.I)
+
+
+def _series(name: str) -> str | None:
+    if not EPISODE.search(name):
+        return None
+    return EPISODE.sub("", name).strip(" -:–") or None
+
+
+def _module_facts(r: dict[str, Any], length: Any) -> list[str]:
+    """reasons the data supports, so a "why" does not get a made-up one ("shorter, mandatory module")"""
+    facts = []
+    if 0 < r["enrolled"] < 10:
+        facts.append(f"only {r['enrolled']} enrolled, so one person changes the completion by about {round(100 / r['enrolled'])} points")
+    if r["enrolled"] and r["past_due"] == r["enrolled"]:
+        facts.append("every enrolment is Past Due")
+    elif r["enrolled"] and r["passed"] == 0:
+        facts.append("nobody has passed yet")
+    if r["not_started"] and r["not_started"] >= r["enrolled"] / 2:
+        facts.append(f"{r['not_started']} of {r['enrolled']} have not started")
+    if length:
+        facts.append(f"length as KnowBe4 lists it: {length}")
+    return facts
+
+
+def _words_match(name: Any, query: str) -> bool:
+    """every word starts a word in the name; numbers match whole ("season 1" matched "Season 2 Ep 01" as a substring)"""
+    text = str(name or "").lower()
+    return all(re.search(rf"\b{re.escape(w)}\b" if w.isdigit() else rf"\b{re.escape(w)}", text) for w in query.lower().split())
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    values = sorted(values)
+    middle = len(values) // 2
+    return values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2
+
+
+async def training_by_module(
+    kb: Any, console: str, module: str | None = None, sort: str = "least_completed", limit: int = 10,
+    start_date: str | None = None, end_date: str | None = None, group_series: bool = True,
+) -> dict[str, Any]:
+    """training per module (course, video, policy): enrolled, passed, past due, not started, completion %, typical time.
+    episodes of one series count as one row unless a module is asked for by name (twelve near-identical
+    "The Inside Man" episodes filled the whole top 10)"""
+    if problem := _bad_period(start_date, end_date):
+        return {"console": console, "error": True, "message": problem}
+    if sort not in MODULE_SORTS:
+        sort = "least_completed"
+    enrollments = [e for e in await kb.list_training_enrollments(console, exclude_archived_users=True)
+                   if _within(e.get("enrollment_date"), start_date, end_date)]
+    period = _period_label(start_date, end_date)
+    by_module: dict[str, list[dict[str, Any]]] = {}
+    for e in enrollments:
+        by_module.setdefault(str(e.get("module_name") or "?"), []).append(e)
+    if module and module.strip():
+        matched = {name: rows for name, rows in by_module.items() if _words_match(name, module)}
+        if not matched:
+            return {
+                "console": console, "module": module, "modules": [],
+                "headline": f"No training module matches '{module}'{' among enrolments from ' + period if period else ''}.",
+                "some_module_names": sorted(by_module)[:15],
+                "note": "Tell the user no module matches and offer some of these names. " + NO_ADVICE,
+            }
+        by_module = matched
+        group_series = False
+
+    # one row per series when its episodes are several; a named module keeps every episode apart
+    groups: dict[str, list[str]] = {}
+    for name in by_module:
+        groups.setdefault((_series(name) if group_series else None) or name, []).append(name)
+    lengths = {}
+    try:
+        lengths = {str(p.get("name")): p.get("duration") for p in await kb.list_store_purchases(console)}
+    except Exception:  # lengths only add a fact; the summary stands without them
+        pass
+
+    rows = []
+    for key, names in groups.items():
+        items = [e for n in names for e in by_module[n]]
+        statuses = Counter(str(e.get("status") or "unknown") for e in items)
+        passed = sum(statuses[s] for s in DONE_STATUSES)
+        minutes = [e["time_spent"] / 60 for e in items
+                   if e.get("status") in DONE_STATUSES and isinstance(e.get("time_spent"), (int, float)) and e["time_spent"] > 0]
+        typical = _median(minutes)
+        series = len(names) > 1
+        row = {
+            "module": f"{key} ({len(names)} episodes)" if series else key,
+            "type": items[0].get("content_type"),
+            "enrolled": len(items),
+            "passed": passed,
+            "past_due": statuses["Past Due"],
+            "in_progress": statuses["In Progress"],
+            "not_started": statuses["Not Started"],
+            "completion_percent": _pct(passed, len(items)),
+            "typical_minutes": round(typical, 1) if typical is not None else None,
+        }
+        if series:
+            row["episodes"] = len(names)
+        row["facts"] = _module_facts(row, None if series else lengths.get(key))
+        rows.append(row)
+    key = {
+        "least_completed": lambda r: (r["completion_percent"] or 0, -r["enrolled"]),
+        "most_completed": lambda r: (-(r["completion_percent"] or 0), -r["enrolled"]),
+        "most_overdue": lambda r: (-r["past_due"], -r["enrolled"]),
+        "most_enrolled": lambda r: (-r["enrolled"], r["module"]),
+        "longest": lambda r: (-(r["typical_minutes"] or 0), r["module"]),
+    }[sort]
+    rows.sort(key=key)
+    passed_all = sum(r["passed"] for r in rows)
+    enrolled_all = sum(r["enrolled"] for r in rows)
+    result: dict[str, Any] = {"console": console, "period": f"enrolled {period}" if period else "all enrolments", "sort": sort}
+    if len(rows) == 1:
+        r = rows[0]
+        overdue_people = sorted({_name(e.get("user") or {}) or "?" for n in groups[next(iter(groups))] for e in by_module[n]
+                                 if e.get("status") == "Past Due"})
+        result["headline"] = (
+            f"Module \"{r['module']}\"{' (enrolled from ' + period + ')' if period else ''}: {r['enrolled']} enrolments, "
+            f"{r['passed']} passed ({r['completion_percent']}%), {r['past_due']} Past Due, {r['not_started']} not started, "
+            f"{r['in_progress']} in progress"
+            + (f"; people who passed typically spent {r['typical_minutes']} minutes." if r["typical_minutes"] is not None else ".")
+        )
+        result["past_due_people"] = overdue_people[: _limit(limit, 20)]
+        result["past_due_people_total"] = len(overdue_people)
+    elif rows:
+        # the first item of the asked order leads: a "best module" answer once opened with the lowest instead,
+        # and the model filled in a wrong lowest of its own
+        def done(r: dict[str, Any]) -> str:
+            return f"\"{r['module']}\" ({r['completion_percent']}%, {r['passed']} of {r['enrolled']} passed)"
+
+        best = max(rows, key=lambda r: (r["completion_percent"] or 0, r["enrolled"]))
+        least = min(rows, key=lambda r: (r["completion_percent"] or 0, -r["enrolled"]))
+        top = rows[0]
+        lead = {
+            "most_completed": f"Highest completion: {done(best)}; lowest: {done(least)}.",
+            "least_completed": f"Lowest completion: {done(least)}; highest: {done(best)}.",
+            "most_overdue": f"Most Past Due: \"{top['module']}\" ({top['past_due']} of {top['enrolled']}).",
+            "most_enrolled": f"Most enrolments: \"{top['module']}\" ({top['enrolled']}, {top['completion_percent']}% passed).",
+            "longest": f"Longest typical time: \"{top['module']}\" ({top['typical_minutes']} minutes).",
+        }[sort]
+        result["headline"] = (
+            f"{'Enrolled from ' + period + ': ' if period else ''}{len(rows)} training modules"
+            f"{' match ' + repr(module) if module else ''}{' (each series counted once)' if any('episodes' in r for r in rows) else ''} with "
+            f"{enrolled_all} enrolments; {passed_all} passed ({_pct(passed_all, enrolled_all)}%). {lead}"
+        )
+    else:
+        result["headline"] = f"No training enrolments{' from ' + period if period else ''}."
+    result.update({
+        "modules_total": len(rows),
+        "enrolments": enrolled_all,
+        "passed": passed_all,
+        # limit 0: every module (the csv export)
+        "modules": [{"rank": i + 1, **r} for i, r in enumerate(rows if limit == 0 else rows[: _limit(limit)])],
+        "series_note": "Rows ending in '(N episodes)' combine the episodes of one series; ask for the series by name for each episode.",
+        "time_note": TIME_SPENT_NOTE + " typical_minutes is the median for people who passed.",
+        "note": ("completion_percent = passed / enrolled for that module. Archived users are left out. Explain a module's result "
+                 "only with its `facts`; never give other reasons (such as a module being mandatory or short). " + NO_ADVICE),
+    })
+    return result
+
+
+LIBRARY_SORTS = ("most_used", "newest", "recently_purchased")
+
+
+async def training_library(
+    kb: Any, console: str, content_type: str | None = None, limit: int = 20, sort: str = "most_used",
+    start_date: str | None = None, end_date: str | None = None,
+) -> dict[str, Any]:
+    """the training content the company has (store purchases): types, length, publish and purchase dates, retired,
+    and which were never assigned. "terbaru" once got "there is no date" though KnowBe4 gives both dates"""
+    if problem := _bad_period(start_date, end_date):
+        return {"console": console, "error": True, "message": problem}
+    if sort not in LIBRARY_SORTS:
+        sort = "most_used"
+    purchases = await kb.list_store_purchases(console)
+    enrollments = await kb.list_training_enrollments(console, exclude_archived_users=True, include_store_purchase_id=True)
+    used = Counter(e.get("store_purchase_id") for e in enrollments)
+    if content_type:
+        purchases = [p for p in purchases if _words_match(p.get("type"), content_type)]
+    period = _period_label(start_date, end_date)
+    if period:
+        # new to us (purchased) or new from KnowBe4 (published) in the period
+        purchases = [p for p in purchases if _within(p.get("publish_date"), start_date, end_date)
+                     or _within(p.get("purchase_date"), start_date, end_date)]
+        if sort == "most_used":
+            sort = "newest"
+    types = Counter(str(p.get("type") or "?") for p in purchases)
+    never = [p for p in purchases if not used.get(p.get("store_purchase_id")) and not p.get("retired")]
+    retired = [p for p in purchases if p.get("retired")]
+    order = {
+        "most_used": lambda p: (-used.get(p.get("store_purchase_id"), 0), str(p.get("name") or "")),
+        "newest": lambda p: str(p.get("publish_date") or ""),
+        "recently_purchased": lambda p: str(p.get("purchase_date") or ""),
+    }[sort]
+    items = sorted(purchases, key=order, reverse=sort != "most_used")
+    published = sum(1 for p in purchases if _within(p.get("publish_date"), start_date, end_date)) if period else None
+    bought = sum(1 for p in purchases if _within(p.get("purchase_date"), start_date, end_date)) if period else None
+    return {
+        "console": console,
+        "period": period or "all content",
+        "sort": sort,
+        "headline": (
+            (f"From {period}: {len(purchases)} training content items are new ({published} published by KnowBe4, "
+             f"{bought} added to the account); " if period else
+             f"The account has {len(purchases)} training content items{' of type ' + repr(content_type) if content_type else ''} ")
+            + f"({', '.join(f'{n} {t}' for t, n in types.most_common())}); {len(retired)} are retired and "
+            f"{len(never)} current ones have never been assigned to anyone."
+            if purchases else f"No training content{' from ' + period if period else ' in the account'}."
+        ),
+        "by_type": dict(types),
+        "items": [
+            {
+                "name": p.get("name"),
+                "type": p.get("type"),
+                "length": p.get("duration"),
+                "published": _date(p.get("publish_date")),
+                "added_to_account": _date(p.get("purchase_date")),
+                "enrolments": used.get(p.get("store_purchase_id"), 0),
+                "retired": bool(p.get("retired")),
+            }
+            for p in items[: _limit(limit, 20)]
+        ],
+        "never_assigned": [p.get("name") for p in never[: _limit(limit, 20)]],
+        "length_note": "KnowBe4 lists the length without a unit.",
+        "note": ("Content from the KnowBe4 store that the account has; enrolments counts current users only. For "
+                 "'recommend' questions list facts only (new content, content never assigned), not opinions. " + NO_ADVICE),
+    }
+
+
+async def group_risk_trend(
+    kb: Any, console: str, group: str | None = None, limit: int = 5, start_date: str | None = None, end_date: str | None = None
+) -> dict[str, Any]:
+    """one group's risk score over time, or how the riskiest groups changed (one history request per group)"""
+    if problem := _bad_period(start_date, end_date):
+        return {"console": console, "error": True, "message": problem}
+    groups = [g for g in await kb.list_groups(console, "active") if g.get("member_count")]
+    full = bool(start_date or end_date)
+    if group and group.strip():
+        matches = [g for g in groups if _words_match(g.get("name"), group)]
+        if not matches:
+            return {"console": console, "error": True,
+                    "message": f"No active group matches '{group}'. Some groups: {', '.join(str(g.get('name')) for g in groups[:12])}."}
+        if len(matches) > 1:
+            return {"console": console, "group": group, "ask_user": True,
+                    "matches": [{"group_id": g.get("id"), "name": g.get("name")} for g in matches[:10]],
+                    "next_step": "Several groups match: list them numbered and ask which one."}
+        g = matches[0]
+        history = await kb.get_group_risk_history(console, g.get("id"), full)
+        history = history if isinstance(history, list) else []
+        trend = _history_stats(history, current=g.get("current_risk_score"))
+        period = _period_stats(history, start_date, end_date, g.get("current_risk_score"))
+        return {
+            "console": console,
+            "group_id": g.get("id"),
+            "group": g.get("name"),
+            "members": g.get("member_count"),
+            "headline": _trend_headline(f"Group {g.get('name')}", trend) + _period_sentence(period),
+            "period": period,
+            "risk_trend": trend,
+            "scale": RISK_SCALE_NOTE,
+            "note": NO_ADVICE,
+        }
+    ranked = sorted((g for g in groups if isinstance(g.get("current_risk_score"), (int, float))),
+                    key=lambda g: g["current_risk_score"], reverse=True)[: max(1, min(int(limit or 5), 10))]
+    rows, gaps = [], set()
+    for g in ranked:
+        history = await kb.get_group_risk_history(console, g.get("id"), full)
+        trend = _history_stats(history if isinstance(history, list) else [], current=g.get("current_risk_score"))
+        if trend.get("data_gap"):
+            gaps.add(trend["data_gap"])
+        change = trend.get("change_vs_90_days_ago") or {}
+        rows.append({
+            "group_id": g.get("id"),
+            "group": g.get("name"),
+            "risk_score": _r(g.get("current_risk_score")),
+            "risk_level": risk_level(g.get("current_risk_score")),
+            "score_90_days_ago": change.get("from_score"),
+            "change_vs_90_days": change.get("change"),
+        })
+    changed = [r for r in rows if isinstance(r["change_vs_90_days"], (int, float))]
+    rose = [r for r in changed if r["change_vs_90_days"] > 0]
+    fell = [r for r in changed if r["change_vs_90_days"] < 0]
+    biggest = max(changed, key=lambda r: abs(r["change_vs_90_days"])) if changed else None
+    return {
+        "console": console,
+        # "0 rose and 1 fell" read as a full picture when 4 of 5 groups had no snapshot to compare with
+        "headline": (
+            f"Of the {len(rows)} riskiest groups, {len(changed)} can be compared with 90 days ago: {len(rose)} rose and "
+            f"{len(fell)} fell"
+            + (f"; the biggest change is {biggest['group']} ({biggest['change_vs_90_days']:+})" if biggest else "")
+            + (f". The other {len(rows) - len(changed)} have no snapshot from 90 days ago." if len(changed) < len(rows) else ".")
+            + (f" {' '.join(sorted(gaps))}" if gaps else "")
+            if rows else "No active groups with members."
+        ),
+        "groups": rows,
+        "scale": RISK_SCALE_NOTE,
+        "note": "Changes are from KnowBe4's weekly group snapshots to the current group score. " + NO_ADVICE,
+    }
+
+
+async def sign_in_activity(kb: Any, console: str, limit: int = 20) -> dict[str, Any]:
+    """who never signed in to KnowBe4 and who has not for a long time (KnowBe4's last_sign_in field, active users)"""
+    users = await kb.list_users(console, "active")
+    today = date.today()
+    never, old, recent, middle = [], [], [], []
+    for u in users:
+        day = _date(u.get("last_sign_in"))
+        if not day:
+            never.append(u)
+            continue
+        age = (today - date.fromisoformat(day)).days
+        (recent if age <= 30 else middle if age <= 90 else old).append((age, u))
+    old.sort(key=lambda pair: pair[0], reverse=True)
+    return {
+        "console": console,
+        "headline": (
+            f"Of {len(users)} active users, {len(never)} have never signed in to KnowBe4, {len(old)} last signed in more than "
+            f"90 days ago, {len(middle)} between 31 and 90 days ago and {len(recent)} in the last 30 days."
+        ),
+        "never_signed_in": len(never),
+        "never_signed_in_people": [{"id": u.get("id"), "name": _name(u), "risk_score": _r(u.get("current_risk_score")),
+                                    "risk_level": risk_level(u.get("current_risk_score"))}
+                                   for u in sorted(never, key=_name)[: _limit(limit, 20)]],
+        "longest_since_sign_in": [{"name": _name(u), "last_sign_in": _date(u.get("last_sign_in")), "days_ago": age}
+                                  for age, u in old[: _limit(limit, 20)]],
+        "note": "Based on KnowBe4's last_sign_in date for each active user. " + NO_ADVICE,
+    }
+
+
+async def new_joiners(
+    kb: Any, console: str, limit: int = 10, start_date: str | None = None, end_date: str | None = None
+) -> dict[str, Any]:
+    """people who joined in the period (start date, or the date they were added to KnowBe4) against everyone else"""
+    if problem := _bad_period(start_date, end_date):
+        return {"console": console, "error": True, "message": problem}
+    if not (start_date or end_date):
+        start_date = (date.today() - timedelta(days=182)).isoformat()
+    users = await kb.list_users(console, "active")
+    field = "employee_start_date" if any(u.get("employee_start_date") for u in users) else "joined_on"
+    joiners = [u for u in users if _date(u.get(field)) and _within(u.get(field), start_date, end_date)]
+    others = [u for u in users if u not in joiners]
+    enrollments = await kb.list_training_enrollments(console, exclude_archived_users=True)
+    past_due = Counter((e.get("user") or {}).get("id") for e in enrollments if e.get("status") == "Past Due")
+    period = _period_label(start_date, end_date)
+
+    def stats(people: list[dict[str, Any]]) -> dict[str, Any]:
+        scores = [u["current_risk_score"] for u in people if isinstance(u.get("current_risk_score"), (int, float))]
+        avg = sum(scores) / len(scores) if scores else None
+        return {"people": len(people), "average_risk_score": _r(avg), "average_risk_level": risk_level(avg),
+                **_ppp_stats(people), "with_past_due_training": sum(1 for u in people if past_due.get(u.get("id")))}
+
+    mine, rest = stats(joiners), stats(others)
+    rows = sorted(joiners, key=lambda u: u.get("current_risk_score") or 0, reverse=True)
+    return {
+        "console": console,
+        "date_used": field + (" (when the user was added to KnowBe4; no employee start dates are filled in)" if field == "joined_on" else ""),
+        "period": period,
+        "headline": (
+            f"{mine['people']} active users joined from {period}; their average risk score is {mine['average_risk_score']} "
+            f"({mine['average_risk_level']}) against {rest['average_risk_score']} ({rest['average_risk_level']}) for the other "
+            f"{rest['people']}. {mine['users_who_failed_a_phishing_test']} of them failed a phishing test and "
+            f"{mine['with_past_due_training']} have Past Due training."
+            if joiners else f"No active users joined from {period}."
+        ),
+        "joiners": mine,
+        "everyone_else": rest,
+        "people": [{"name": _name(u), "joined": _date(u.get(field)), "risk_score": _r(u.get("current_risk_score")),
+                    "risk_level": risk_level(u.get("current_risk_score")), "phish_prone_percent": _r(u.get("phish_prone_percentage")),
+                    "past_due_training": past_due.get(u.get("id"), 0)} for u in rows[: _limit(limit)]],
+        "scale": RISK_SCALE_NOTE,
+        "note": NO_ADVICE,
+    }
+
+
+async def callback_phishing_summary(
+    kb: Any, console: str, limit: int = 10, start_date: str | None = None, end_date: str | None = None
+) -> dict[str, Any]:
+    """callback (phone) phishing: who called the number in the email and who gave data on the call"""
+    if problem := _bad_period(start_date, end_date):
+        return {"console": console, "error": True, "message": problem}
+    tests = [t for t in await kb.list_phishing_security_tests(console, "callback") if _within(t.get("started_at"), start_date, end_date)]
+    period = _period_label(start_date, end_date)
+    with_calls = [t for t in tests if t.get("called_count") or t.get("callback_data_entered_count")]
+    called = sum(t.get("called_count") or 0 for t in tests)
+    gave_data = sum(t.get("callback_data_entered_count") or 0 for t in tests)
+    with_calls.sort(key=lambda t: str(t.get("started_at") or ""), reverse=True)
+    return {
+        "console": console,
+        "period": period or "all tests",
+        "headline": (
+            f"Callback phishing{' from ' + period if period else ''}: {called} calls to the phone number and {gave_data} people "
+            f"gave data on the call, across {len(with_calls)} tests with callback results."
+            if with_calls else
+            f"No callback (phone) phishing results{' from ' + period if period else ''}: nobody called the number in any of the "
+            f"{len(tests)} phishing tests, so the account has no callback phishing activity to report."
+        ),
+        "tests_checked": len(tests),
+        "tests_with_callback_results": len(with_calls),
+        "called": called,
+        "data_entered_on_call": gave_data,
+        "tests": [{"name": t.get("name"), "started_at": _date(t.get("started_at")), "delivered": t.get("delivered_count"),
+                   "called": t.get("called_count"), "data_entered_on_call": t.get("callback_data_entered_count")}
+                  for t in with_calls[: _limit(limit)]],
+        "note": "Callback phishing emails ask people to phone a number; 'called' = they phoned it. " + NO_ADVICE,
     }

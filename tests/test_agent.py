@@ -99,7 +99,7 @@ async def test_single_tool_call_then_answer(monkeypatch):
     session = FakeSession({"get_account": {"current_risk_score": 12.3}})
     agent = make_agent(make_config(monkeypatch), llm, session)
 
-    assert await agent.ask("risk score?") == "Risk score 12.3"
+    assert await agent.ask("risk score?") == "Risk score 12,3"
     # console is normalised before the mcp call
     assert session.calls == [("get_account", {"console": "main"})]
     [msg] = tool_messages(llm.requests[1])
@@ -232,7 +232,7 @@ async def test_empty_answer_gets_one_nudge(monkeypatch):
         reply("Risk score 39.4"),
     ])
     agent = make_agent(make_config(monkeypatch), llm, FakeSession())
-    assert await agent.ask("x") == "Risk score 39.4"
+    assert await agent.ask("x") == "Risk score 39,4"
     assert llm.requests[2]["messages"][-1]["role"] == "user"
 
 
@@ -353,7 +353,7 @@ async def test_numbers_without_any_tool_force_a_fetch(monkeypatch):
     ])
     session = FakeSession()
     agent = make_agent(make_config(monkeypatch), llm, session)
-    assert await agent.ask("siapa paling berisiko?") == "Risk score 39.4"
+    assert await agent.ask("siapa paling berisiko?") == "Risk score 39,4"
     assert "tidak ada tool yang dipanggil" in llm.requests[1]["messages"][-1]["content"]
     assert session.calls == [("get_account", {"console": "main"})]
 
@@ -420,7 +420,7 @@ async def test_note_lines_are_never_shown(monkeypatch):
         reply(PAGE_NOTE + "\n\nRisk score 39.4"),
     ])
     agent = make_agent(make_config(monkeypatch), llm, FakeSession())
-    assert await agent.ask("risk?") == "Risk score 39.4"
+    assert await agent.ask("risk?") == "Risk score 39,4"
 
 
 async def test_asks_which_one_when_the_model_forgets(monkeypatch):
@@ -479,7 +479,7 @@ async def test_single_match_history_question_gets_the_summary(monkeypatch):
     agent = make_agent(make_config(monkeypatch), llm, session)
     answer = await agent.ask("tampilkan risk score history Rina Putri selengkapnya")
     assert session.calls == [("find_user", {"console": "main", "query": "rina novita"}), ("user_risk_summary", {"console": "main", "user_id": 9})]
-    assert answer == "Riwayat Rina Putri: 40.24 (Medium)"
+    assert answer == "Riwayat Rina Putri: 40,24 (Medium)"
 
 
 async def test_delete_request_is_not_turned_into_a_summary(monkeypatch):
@@ -1034,7 +1034,7 @@ async def test_capability_question_gets_the_fixed_list(monkeypatch, prompt, lang
     llm = FakeLLM([])
     session = FakeSession()
     answer = await make_agent(make_config(monkeypatch), llm, session).ask(prompt, language=language)
-    assert answer == msg("capabilities", language)
+    assert answer == msg("capabilities", language, products="")
     assert llm.requests == [] and session.calls == []
 
 
@@ -1051,7 +1051,7 @@ async def test_questions_that_only_look_like_capability_questions_go_to_the_mode
 
 def test_capability_list_has_no_features_the_bot_lacks():
     for language in ("id", "en"):
-        text = msg("capabilities", language).lower()
+        text = msg("capabilities", language, products="".join(msg(f"capability_{p}", language) for p in ("ksat", "phisher", "piq", "coach", "events"))).lower()
         assert not any(word in text for word in ("excel", "departemen", "department", "console", "konsol"))
 
 OVERVIEW = {
@@ -1195,3 +1195,312 @@ async def test_which_person_lists_the_detail_for_same_names(monkeypatch):
     ]
     answer = await make_agent(make_config(monkeypatch), FakeLLM([]), FakeSession()).ask("berapa risk score dia?", history=history)
     assert "1. Andi Wijaya · andi.w@example.com\n2. Andi Wijaya · andi.wijaya@example.com · archived" in answer
+
+
+
+NEW_TOOLS = ["training_by_module", "training_library", "group_risk_trend", "sign_in_activity", "new_joiners",
+             "callback_phishing_summary", "phishing_test_detail", "overdue_training", "make_chart", "account_risk_overview"]
+
+
+def topic_session():
+    session = FakeSession()
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in NEW_TOOLS)
+    return session
+
+
+@pytest.mark.parametrize("prompt,tool", [
+    ("modul apa yang paling jarang diselesaikan?", "training_by_module"),
+    ("mdoul phishing brp yg lulus", "training_by_module"),
+    ("Which training module has the lowest completion?", "training_by_module"),
+    ("konten training apa saja yang kita punya?", "training_library"),
+    ("what training modules do we have?", "training_library"),
+    ("siapa yang belum pernah login?", "sign_in_activity"),
+    ("karyawan baru gimana risikonya", "new_joiners"),
+    ("how are new hires doing?", "new_joiners"),
+    ("grup finance membaik ga?", "group_risk_trend"),
+    ("is the IT team getting better over time?", "group_risk_trend"),
+    ("seberapa cepat orang klik email phishing terakhir?", "phishing_test_detail"),
+    ("callback phishing kita gimana?", "callback_phishing_summary"),
+])
+async def test_topic_questions_reach_their_tool_when_the_model_skips_it(monkeypatch, prompt, tool):
+    session = topic_session()
+    llm = FakeLLM([reply("**Jawaban tanpa data.**"), reply("**Dari data.**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert tool in [c[0] for c in session.calls]
+
+
+async def test_risk_over_time_is_not_a_group_question(monkeypatch):
+    session = topic_session()
+    llm = FakeLLM([reply("**ok**"), reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask("show the risk score over time")
+    assert "group_risk_trend" not in [c[0] for c in session.calls]
+
+
+async def test_overdue_answer_already_covers_overdue_modules(monkeypatch):
+    session = topic_session()
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "overdue_training", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Modul paling banyak telat: Password Basics.**"),
+    ])
+    await make_agent(make_config(monkeypatch), llm, session).ask("modul apa yg paling banyak telat")
+    assert "training_by_module" not in [c[0] for c in session.calls]
+
+
+async def test_module_chart_only_for_questions_about_all_modules(monkeypatch):
+    session = topic_session()
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "training_by_module", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Modul terendah: Password Basics.**"),
+    ])
+    await make_agent(make_config(monkeypatch), llm, session).ask("modul mana yang paling rendah penyelesaiannya?")
+    assert [c[1]["chart"] for c in session.calls if c[0] == "make_chart"] == ["modules"]
+    session = topic_session()
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "training_by_module", '{"console": "main", "module": "phishing 101"}')], finish="tool_calls"),
+        reply("**Modul Phishing 101: 2 lulus.**"),
+    ])
+    await make_agent(make_config(monkeypatch), llm, session).ask("modul phishing 101 berapa yang lulus?")
+    assert "make_chart" not in [c[0] for c in session.calls]
+
+
+async def test_one_group_trend_gets_its_own_line_chart(monkeypatch):
+    session = topic_session()
+    session.results["group_risk_trend"] = {"group_id": 20, "group": "IT", "headline": "Group IT: risk score now 30.0 (Low)."}
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "group_risk_trend", '{"console": "main", "group": "it"}')], finish="tool_calls"),
+        reply("**Grup IT membaik.**"),
+    ])
+    await make_agent(make_config(monkeypatch), llm, session).ask("grup IT membaik ga?")
+    charts = [c[1] for c in session.calls if c[0] == "make_chart"]
+    assert charts and charts[0]["chart"] == "group_trend" and charts[0]["group_id"] == 20
+
+
+
+async def test_not_watched_videos_are_progress_not_the_library(monkeypatch):
+    # live: the model answered from the library ("never assigned") instead of who has not watched
+    session = topic_session()
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "training_library", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Ada video yang belum ditonton.**"),
+        reply("**Dari progres modul.**"),
+    ])
+    await make_agent(make_config(monkeypatch), llm, session).ask("video training mana yang belum ditonton")
+    assert [c[0] for c in session.calls][:2] == ["training_library", "training_by_module"]
+
+
+async def test_module_completion_question_is_not_covered_by_overdue_training(monkeypatch):
+    # live: overdue + campaign completion were used for "modules enrolled from 2026", without the module tool
+    session = topic_session()
+    session.tools.append(SimpleNamespace(name="training_completion_summary", description="d", input_schema={"type": "object"}))
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "overdue_training", '{"console": "main"}'),
+                     tool_call("c2", "training_completion_summary", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Penyelesaian rendah.**"),
+        reply("**Dari progres modul.**"),
+    ])
+    await make_agent(make_config(monkeypatch), llm, session).ask("modul yg dienroll dari 2026 gimana penyelesaiannya")
+    module_calls = [c[1] for c in session.calls if c[0] == "training_by_module"]
+    assert module_calls == [{"console": "main", "start_date": "2026-01-01"}]
+
+
+
+def fresh_session(refreshed=True):
+    session = topic_session()
+    session.tools.append(SimpleNamespace(name="refresh_data", description="d", input_schema={"type": "object"}))
+    session.results["refresh_data"] = ({"console": "main", "refreshed": True, "cached_answers_dropped": 4} if refreshed
+                                       else {"console": "main", "refreshed": False, "data_age_at_most_seconds": 25})
+    session.results["account_risk_overview"] = {"current": {"score": 38.01, "level": "Low"}, "ok": True}
+    return session
+
+
+@pytest.mark.parametrize("prompt,language", [
+    ("ambil data terbaru, berapa risk score sekarang?", "id"), ("refresh dong risk scorenya", "id"),
+    ("jangan pakai cache, risk score berapa", "id"), ("fetch fresh data: what is the risk score?", "en"),
+])
+async def test_fresh_data_question_refreshes_before_any_tool(monkeypatch, prompt, language):
+    session = fresh_session()
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "account_risk_overview", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Risk score 38,01.**"),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask(prompt, language)
+    assert session.calls[0] == ("refresh_data", {"console": "main"})
+    assert answer.endswith("*" + msg("fresh_data", language) + "*")
+    # the model never sees the refresh tool
+    assert "refresh_data" not in [t["function"]["name"] for t in llm.requests[0]["tools"]]
+
+
+async def test_refresh_within_the_minute_says_how_old_the_data_is(monkeypatch):
+    session = fresh_session(refreshed=False)
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "account_risk_overview", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Risk score 38,01.**"),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("refresh, risk score berapa?")
+    assert answer.endswith("*" + msg("fresh_recent", "id", seconds=25) + "*")
+
+
+@pytest.mark.parametrize("prompt", ["tes phishing terbaru apa?", "risk score terbaru berapa?", "latest phishing test results"])
+async def test_latest_item_is_not_a_refresh(monkeypatch, prompt):
+    session = fresh_session()
+    llm = FakeLLM([reply("**ok**"), reply("**ok**"), reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert "refresh_data" not in [c[0] for c in session.calls]
+
+
+
+PRODUCT_TOOL_NAMES = ["industry_benchmark", "reported_emails", "phisher_rules", "usb_test_results", "physical_qr_results",
+                      "simulation_overview", "admin_audit_log", "security_coaching", "password_risks", "user_events", "product_status"]
+
+
+def product_config(monkeypatch, **keys):
+    config = make_config(monkeypatch)
+    for product, value in keys.items():
+        monkeypatch.setenv(f"KB4_T_{product.upper()}", value)
+        setattr(config.consoles["main"], f"{product}_key_env", f"KB4_T_{product.upper()}")
+    return config
+
+
+def product_session():
+    session = topic_session()
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in PRODUCT_TOOL_NAMES)
+    return session
+
+
+async def test_product_tools_are_hidden_without_their_key(monkeypatch):
+    llm = FakeLLM([reply("**ok**")])
+    await make_agent(product_config(monkeypatch, phisher="token"), llm, product_session()).ask("hai")
+    offered = {t["function"]["name"] for t in llm.requests[0]["tools"]}
+    assert {"reported_emails", "phisher_rules", "product_status"} <= offered
+    assert not offered & {"industry_benchmark", "usb_test_results", "password_risks", "security_coaching", "user_events"}
+
+
+async def test_capability_answer_lists_only_configured_products(monkeypatch):
+    agent = make_agent(product_config(monkeypatch, phisher="token", ksat="token"), FakeLLM([]), product_session())
+    answer = await agent.ask("Apa saja yang bisa kamu lakukan?")
+    assert msg("capability_phisher", "id") in answer and msg("capability_ksat", "id") in answer
+    assert msg("capability_piq", "id") not in answer
+
+
+@pytest.mark.parametrize("prompt,tool", [
+    ("berapa email mencurigakan yang dilaporkan karyawan bulan ini?", "reported_emails"),
+    ("how many suspicious emails were reported?", "reported_emails"),
+    ("phish-prone kita dibanding benchmark industri gimana?", "industry_benchmark"),
+    ("ada yang buka file dari flashdisk?", "usb_test_results"),
+    ("hasil tes qr fisik di poster gimana", "physical_qr_results"),
+    ("jenis simulasi apa saja yang pernah kita jalankan?", "simulation_overview"),
+    ("siapa yang mengubah pengaturan phishing minggu ini?", "admin_audit_log"),
+    ("real-time coaching sudah jalan belum?", "security_coaching"),
+    ("ada password lemah?", "password_risks"),
+    ("produk knowbe4 apa saja yang aktif?", "product_status"),
+])
+async def test_product_questions_reach_their_tool(monkeypatch, prompt, tool):
+    session = product_session()
+    config = product_config(monkeypatch, ksat="t", phisher="t", piq="t", coach="t", events="t")
+    llm = FakeLLM([reply("**Tanpa data.**"), reply("**Dari data.**")])
+    await make_agent(config, llm, session).ask(prompt)
+    assert tool in [c[0] for c in session.calls]
+
+
+async def test_reported_phishing_email_is_not_the_phishing_test_report(monkeypatch):
+    session = product_session()
+    llm = FakeLLM([reply("**Tanpa data.**"), reply("**Dari data.**")])
+    await make_agent(product_config(monkeypatch, phisher="t"), llm, session).ask("berapa email phishing yang dilaporkan karyawan ke phisher?")
+    called = [c[0] for c in session.calls]
+    assert "reported_emails" in called and "phishing_test_detail" not in called
+
+
+async def test_topic_without_its_tool_is_left_to_the_model(monkeypatch):
+    # no PhishER key: the tool is hidden, so nothing may be forced
+    session = product_session()
+    llm = FakeLLM([reply("**PhishER tidak tersedia.**")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("berapa email mencurigakan yang dilaporkan?")
+    assert answer == "**PhishER tidak tersedia.**" and session.calls == []
+
+
+
+@pytest.mark.parametrize("first,language", [
+    ("**Saya tidak bisa memprediksi nilai risiko untuk bulan depan.**", "id"),
+    ("I can't predict next month's risk score.", "en"),
+])
+async def test_forecast_refusal_in_its_own_words_becomes_the_fixed_line(monkeypatch, first, language):
+    llm = FakeLLM([reply(first + "\nTrend terkini menurun.")])
+    answer = await make_agent(make_config(monkeypatch), llm, FakeSession()).ask(
+        "Berapa risk score bulan depan?" if language == "id" else "What will the risk score be next month?", language)
+    assert answer.startswith(f"**{msg('no_prediction', language)}**") and answer.endswith("menurun.")
+
+
+async def test_a_real_answer_to_a_will_question_is_not_turned_into_a_refusal(monkeypatch):
+    llm = FakeLLM([reply("**The Q4 campaign will end when its last enrolment closes.**")])
+    answer = await make_agent(make_config(monkeypatch), llm, FakeSession()).ask("When will the Q4 campaign end?", "en")
+    assert answer == "**The Q4 campaign will end when its last enrolment closes.**"
+
+
+
+@pytest.mark.parametrize("wrong,right", [
+    ("**Risiko skor saat ini untuk organisasi adalah 38.01 (level Medium).**", "**Risiko skor saat ini untuk organisasi adalah 38.01 (level Low).**"),
+    ("Risk score 38,01 (Sedang) sekarang.", "Risk score 38,01 (Rendah) sekarang."),
+    ("The risk score is 50.2, level Medium, and rising.", "The risk score is 50.2, level High, and rising."),
+    ("- Skor risiko Ana 55 (tingkat Tinggi)\n- Skor Budi 30 (Low)", "- Skor risiko Ana 55 (tingkat Kritis)\n- Skor Budi 30 (Low)"),
+])
+def test_wrong_level_next_to_a_risk_score_is_corrected(wrong, right):
+    from agent.agent import _fix_levels
+
+    assert _fix_levels(wrong) == right
+
+
+@pytest.mark.parametrize("text", [
+    "Risk score 38.01 (Low).\n\n**Kenapa**\n- 18 orang gagal tes phishing.",
+    "Phish-prone 25% (Medium) di tes terakhir.",          # a percentage, not a risk score
+    "Risiko tinggi ada di grup Sales dengan 12 orang.",   # an adjective, not a level next to a score
+    "| 1 | Ana | 40.24 | Low | 0% |",                    # table rows are built from the data
+    "Tes phishing 12 (Medium) selesai.",                   # no risk word in the sentence
+])
+def test_correct_or_unrelated_text_is_left_alone(text):
+    from agent.agent import _fix_levels
+
+    assert _fix_levels(text) == text
+
+
+
+async def test_risk_question_answered_from_the_bare_account_fetches_the_overview(monkeypatch):
+    # live: "brp risko skor skrg" was answered from get_account alone as "38.01 (level Medium)"
+    session = topic_session()
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "get_account", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Risk score 39.4.**"),
+        reply("**Risk score 39.4 (Low).**"),
+    ])
+    await make_agent(make_config(monkeypatch), llm, session).ask("brp risko skor skrg")
+    assert [c[0] for c in session.calls][:2] == ["get_account", "account_risk_overview"]
+
+
+
+@pytest.mark.parametrize("raw,clean", [
+    ("**Prodak KnowBe4 yang aktif: PhishER.**", "**Produk KnowBe4 yang aktif: PhishER.**"),
+    ("Kampain dengan 0% penyelesaian dan kampayan lain.", "Kampanye dengan 0% penyelesaian dan kampanye lain."),
+    ('Kampain bernama "Kampain Q3" selesai.', 'Kampanye bernama "Kampain Q3" selesai.'),   # a real name stays
+    ("| 1 | Kampain Q3 | 0% |", "| 1 | Kampain Q3 | 0% |"),                                 # table rows are data
+    ("Produktif dan kampanye benar.", "Produktif dan kampanye benar."),
+])
+def test_indonesian_answer_misspellings_are_corrected(raw, clean):
+    from agent.agent import _fix_typos_in_answer
+
+    assert _fix_typos_in_answer(raw) == clean
+
+
+
+@pytest.mark.parametrize("raw,clean", [
+    ("Phish-prone kita 14.31% dan risk score 38.01 (Low).", "Phish-prone kita 14,31% dan risk score 38,01 (Low)."),
+    ("Rata-rata 4.2 lebih rendah.", "Rata-rata 4,2 lebih rendah."),
+    ("Total 2.233 dari 2.608 enrolmen.", "Total 2.233 dari 2.608 enrolmen."),          # thousands, indonesian style
+    ("Versi 1.64.1 di 192.168.1.20 pada 2026-11-10.", "Versi 1.64.1 di 192.168.1.20 pada 2026-11-10."),
+    ("NIST SP 800-50r1 halaman 12.", "NIST SP 800-50r1 halaman 12."),
+    ('Tes "Q3 1.5" selesai.', 'Tes "Q3 1.5" selesai.'),                                   # quoted name
+    ("![grafik](/static/charts/a1.5.png)", "![grafik](/static/charts/a1.5.png)"),        # link
+    ("| 1 | Ana | 40.24 | Low | 0% |", "| 1 | Ana | 40.24 | Low | 0% |"),                 # table row from the data
+])
+def test_indonesian_decimals_use_a_comma(raw, clean):
+    from agent.agent import _fix_typos_in_answer
+
+    assert _fix_typos_in_answer(raw) == clean

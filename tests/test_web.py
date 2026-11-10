@@ -227,3 +227,13 @@ def test_chart_images_are_served_fresh_and_expire(client, tmp_path, monkeypatch)
     assert client.get(f"/static/charts/{stale}.png").status_code == 404
     assert not (tmp_path / f"{stale}.png").exists()
     assert client.get("/static/charts/..%2F..%2F.env.png").status_code == 404
+
+
+
+def test_health_lists_product_keys_by_name_only(client, monkeypatch):
+    for console in main.CONFIG.consoles.values():
+        monkeypatch.setattr(console, "ksat_key_env", "KB4_TEST_KSAT")
+    monkeypatch.setenv("KB4_TEST_KSAT", "secret-value")
+    body = client.get("/health").json()
+    assert all(products == ["ksat"] for products in body["product_apis"].values())
+    assert "secret-value" not in json.dumps(body)

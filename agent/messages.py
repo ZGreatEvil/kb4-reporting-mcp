@@ -111,6 +111,18 @@ MESSAGES: dict[str, dict[str, str]] = {
         "id": "Panggil list_users_page dengan offset={offset} sekarang, lalu tampilkan user tersebut dalam tabel. Jangan pakai data dari pesan sebelumnya.",
         "en": "Call list_users_page with offset={offset} now, then show those users in a table. Do not reuse data from earlier messages.",
     },
+    "fresh_data": {
+        "id": "Data diambil langsung dari KnowBe4 barusan.",
+        "en": "Data fetched from KnowBe4 just now.",
+    },
+    "fresh_recent": {
+        "id": "Data sudah diambil ulang dari KnowBe4 {seconds} detik yang lalu, jadi masih terbaru.",
+        "en": "Data was refetched from KnowBe4 {seconds} seconds ago, so it is still current.",
+    },
+    "call_topic": {
+        "id": "Pertanyaan ini dijawab oleh {tool}. Panggil {tool} sekarang, lalu jawab hanya dari hasilnya.",
+        "en": "This question is answered by {tool}. Call {tool} now, then answer only from its result.",
+    },
     "call_again": {
         "id": "Alasannya harus dari data. Panggil {tool} sekarang, lalu jelaskan hanya dari hasilnya; jangan menebak penyebab yang tidak ada di data.",
         "en": "The reason must come from the data. Call {tool} now, then explain only from its result; do not guess causes the data does not show.",
@@ -216,17 +228,40 @@ MESSAGES: dict[str, dict[str, str]] = {
         "id": "tidak ada data pada periode {period}",
         "en": "no data from {period}",
     },
+    # capability lines for product apis, shown only when that product's key is configured
+    "capability_ksat": {
+        "id": "- **Benchmark dan simulasi lain:** phish-prone % dibanding benchmark resmi KnowBe4 per industri dan ukuran perusahaan, tes USB, tes QR fisik, semua jenis kampanye (termasuk callback dan vishing), dan log perubahan admin.",
+        "en": "- **Benchmarks and other simulations:** phish-prone % against KnowBe4's official benchmark per industry and company size, USB drive tests, physical QR tests, every campaign type (including callback and vishing), and the admin change log.",
+    },
+    "capability_phisher": {
+        "id": "- **Email yang dilaporkan (PhishER):** berapa email mencurigakan yang dilaporkan karyawan, mana yang ancaman, spam atau bersih, mana yang belum ditangani, dan aturan PhishER.",
+        "en": "- **Reported emails (PhishER):** how many suspicious emails employees reported, which were threats, spam or clean, which are still open, and the PhishER rules.",
+    },
+    "capability_piq": {
+        "id": "- **Password (PasswordIQ):** password lemah, dipakai bersama, bocor atau tidak pernah kedaluwarsa dari pemindaian Active Directory.",
+        "en": "- **Passwords (PasswordIQ):** weak, shared, breached or never-expiring passwords from the Active Directory scan.",
+    },
+    "capability_coach": {
+        "id": "- **Real-Time Coaching:** apakah sudah disiapkan, berapa coaching yang dikirim, dan siapa yang paling sering memicunya.",
+        "en": "- **Real-Time Coaching:** whether it is set up, how much coaching went out, and who triggered it most.",
+    },
+    "capability_events": {
+        "id": "- **Event dari tool keamanan lain** (User Event API), dan produk KnowBe4 mana yang sedang dipakai.",
+        "en": "- **Events from other security tools** (User Event API), and which KnowBe4 products are in use.",
+    },
     # only what the bot really does; keep in step with the tools when they change
     "capabilities": {
         "id": (
             "**Saya membaca data KnowBe4 organisasi Anda dan memberi panduan security awareness.**\n\n"
             "Yang bisa saya lakukan:\n"
             "- **Risk score:** risk score organisasi sekarang, levelnya, perubahannya dalam 30 dan 90 hari, dan alasannya.\n"
-            "- **Pengguna dan grup:** pengguna dan grup paling berisiko, mencari orang berdasarkan nama atau email, dan riwayat risk score seseorang.\n"
-            "- **Phishing:** hasil tes phishing, siapa yang klik dan siapa yang melaporkan, siapa yang gagal lebih dari sekali, dan phish-prone % dibanding benchmark KnowBe4.\n"
-            "- **Training:** penyelesaian training campaign dan training yang lewat tenggat.\n"
+            "- **Pengguna dan grup:** pengguna dan grup paling berisiko, tren risiko sebuah grup, mencari orang berdasarkan nama atau email, riwayat risk score seseorang, siapa yang belum pernah login ke KnowBe4, dan karyawan baru.\n"
+            "- **Phishing:** hasil tes phishing, siapa yang klik dan siapa yang melaporkan, seberapa cepat orang tertipu, siapa yang gagal lebih dari sekali, callback phishing (lewat telepon), dan phish-prone % dibanding benchmark KnowBe4.\n"
+            "- **Training:** penyelesaian training campaign, progres per modul (lulus, lewat tenggat, belum mulai, waktu pengerjaan), konten training yang dimiliki, dan training yang lewat tenggat.\n"
+            "{products}"
             "- **Periode:** sebutkan periode seperti \"dari 2026\" atau \"3 bulan terakhir\". Tanpa periode, saya memakai 12 bulan terakhir.\n"
             "- **Grafik dan CSV:** grafik muncul sendiri bila membantu. File CSV saya buat bila Anda memintanya.\n"
+            "- **Data terbaru:** data KnowBe4 disimpan 10 menit. Tulis \"ambil data terbaru\" atau \"refresh\" untuk mengambilnya langsung dari KnowBe4.\n"
             "- **Panduan NIST:** cara menjalankan, mengukur dan meningkatkan program awareness dan simulasi phishing, dengan sumber dari dokumen NIST.\n\n"
             "Yang tidak bisa saya lakukan: mengubah atau menghapus data (saya hanya membaca), memprediksi nilai di masa depan, "
             "dan menjawab pertanyaan di luar KnowBe4 dan security awareness.\n\n"
@@ -234,18 +269,20 @@ MESSAGES: dict[str, dict[str, str]] = {
             "- Berapa risk score sekarang, dan kenapa?\n"
             "- Siapa 10 pengguna paling berisiko?\n"
             "- Siapa yang klik email phishing terakhir?\n"
-            "- Training apa saja yang lewat tenggat?\n"
+            "- Modul training mana yang paling sedikit diselesaikan?\n"
             "- Bagaimana cara mengukur efektivitas training security awareness?"
         ),
         "en": (
             "**I read your organisation's KnowBe4 data and give security awareness guidance.**\n\n"
             "What I can do:\n"
             "- **Risk score:** the organisation's current risk score, its level, how it changed over 30 and 90 days, and why.\n"
-            "- **Users and groups:** the riskiest users and groups, finding a person by name or email, and a person's risk score history.\n"
-            "- **Phishing:** phishing test results, who clicked and who reported, who failed more than once, and the phish-prone % against KnowBe4's benchmark.\n"
-            "- **Training:** training campaign completion and overdue training.\n"
+            "- **Users and groups:** the riskiest users and groups, a group's risk trend, finding a person by name or email, a person's risk score history, who has never signed in to KnowBe4, and new joiners.\n"
+            "- **Phishing:** phishing test results, who clicked and who reported, how fast people fell for it, who failed more than once, callback (phone) phishing, and the phish-prone % against KnowBe4's benchmark.\n"
+            "- **Training:** training campaign completion, progress per module (passed, overdue, not started, time spent), the training content you have, and overdue training.\n"
+            "{products}"
             "- **Periods:** name a period such as \"since 2026\" or \"the last 3 months\". Without one, I use the past 12 months.\n"
             "- **Charts and CSV:** charts appear on their own when they help. I make a CSV file when you ask for one.\n"
+            "- **Fresh data:** KnowBe4 data is kept for 10 minutes. Say \"fetch fresh data\" or \"refresh\" to get it straight from KnowBe4.\n"
             "- **NIST guidance:** how to run, measure and improve awareness programmes and phishing simulations, with sources from NIST documents.\n\n"
             "What I can't do: change or delete data (I only read it), predict future values, "
             "or answer questions outside KnowBe4 and security awareness.\n\n"
@@ -253,7 +290,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "- What is the risk score now, and why?\n"
             "- Who are the 10 riskiest users?\n"
             "- Who clicked the latest phishing email?\n"
-            "- Which training is overdue?\n"
+            "- Which training module has the lowest completion?\n"
             "- How can we measure how effective security awareness training is?"
         ),
     },

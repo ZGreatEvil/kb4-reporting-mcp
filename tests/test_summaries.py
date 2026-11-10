@@ -39,6 +39,11 @@ class FakeKB:
     async def list_training_campaigns(self, console, exclude_percentages=False, max_records=None):
         return [dict(c) for c in CAMPAIGNS]
 
+    async def list_training_enrollments(self, console, **kwargs):
+        self.calls.append(("enrollments", kwargs))
+        return [{"campaign_id": 101, "status": "Passed"}, {"campaign_id": 101, "status": "Past Due"},
+                {"campaign_id": 102, "status": "Past Due"}, {"campaign_id": None, "status": "Passed"}]
+
     async def get_account(self, console):
         if console == "broken":
             raise RuntimeError("boom")
@@ -123,6 +128,16 @@ async def test_training_filters():
     assert [c["campaign_id"] for c in ranged["campaigns"]] == [102]
     none = await summaries.training_completion_summary(kb, "main", campaign_id=999)
     assert none["campaigns"] == [] and none["average_completion_percentage"] is None
+
+
+async def test_training_campaigns_carry_their_enrolment_statuses():
+    # the model once guessed why a campaign was at 0%; the statuses say why
+    kb = FakeKB()
+    result = await summaries.training_completion_summary(kb, "main")
+    by_id = {c["campaign_id"]: c["enrolments_by_status"] for c in result["campaigns"]}
+    assert by_id == {102: {"Past Due": 1}, 101: {"Passed": 1, "Past Due": 1}, 103: {}}
+    assert ("enrollments", {"exclude_archived_users": True, "include_campaign_id": True}) in kb.calls
+    assert "do not guess" in result["note"]
 
 
 async def test_compare_consoles(monkeypatch):

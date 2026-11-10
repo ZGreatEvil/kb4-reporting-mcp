@@ -18,6 +18,7 @@ import matplotlib
 matplotlib.use("Agg")  # no window, safe in a server process
 import matplotlib.pyplot as plt  # noqa: E402
 
+from kb4_mcp.products import _all_messages, reported_emails  # noqa: E402
 from kb4_mcp.summaries import (  # noqa: E402
     _bad_period,
     _date,
@@ -28,6 +29,7 @@ from kb4_mcp.summaries import (  # noqa: E402
     _within,
     risk_by_group,
     risk_level,
+    training_by_module,
 )
 
 STATIC = Path(__file__).resolve().parents[1] / "web" / "static"
@@ -36,14 +38,16 @@ CHART_DIR = STATIC / "charts"
 EXPORT_DIR = Path(__file__).resolve().parents[1] / "exports"
 KEEP_SECONDS = 3600
 
-CHARTS = ("risk_trend", "users_by_level", "top_users", "phishing_tests", "training_completion", "groups")
+CHARTS = ("risk_trend", "users_by_level", "top_users", "phishing_tests", "training_completion", "groups", "modules", "group_trend",
+          "reported_emails")
 # charts of data over time; the others show today's state, which has no period
-PERIOD_CHARTS = {"risk_trend", "phishing_tests", "training_completion"}
-DATASETS = ("users", "phishing_tests", "training_campaigns", "risk_history")
+PERIOD_CHARTS = {"risk_trend", "phishing_tests", "training_completion", "group_trend", "reported_emails"}
+DATASETS = ("users", "phishing_tests", "training_campaigns", "risk_history", "modules", "reported_emails")
 
 LEVEL_ORDER = ["Low", "Medium", "High", "Critical"]
 LEVEL_COLOURS = {"Low": "#16a34a", "Medium": "#f59e0b", "High": "#ea580c", "Critical": "#dc2626"}
 ACCENT = "#0071E3"
+STATUS_COLOURS = {"passed": "#16a34a", "in_progress": ACCENT, "not_started": "#94a3b8", "past_due": "#dc2626"}
 
 LABELS = {
     "id": {
@@ -54,6 +58,15 @@ LABELS = {
         "phishing_tests": "Phish-prone % per tes phishing (terbaru)",
         "training_completion": "Penyelesaian training per kampanye (terbaru)",
         "groups": "{n} grup dengan risk score tertinggi",
+        # short: long module names push the plot (and a left-aligned title) to the right
+        "modules": "Status per modul ({n} terbanyak peserta)",
+        "reported_emails": "Email yang dilaporkan ke PhishER per bulan",
+        "reports": "Laporan",
+        "enrolments": "Pendaftaran",
+        "enrolments_share": "% pendaftaran (angka di kanan: % lulus · jumlah pendaftaran)",
+        "statuses": {"passed": "Lulus", "in_progress": "Sedang dikerjakan", "not_started": "Belum mulai", "past_due": "Lewat tenggat"},
+        "group_trend": "Risk score grup {name} dari waktu ke waktu",
+        "no_group": "Pilih satu grup untuk grafik ini (group_id dari group_risk_trend).",
         "no_history": "Belum ada riwayat risk score untuk grafik ini.",
         "no_data": "Belum ada data KnowBe4 untuk grafik ini.",
         "today": "hari ini",
@@ -70,6 +83,14 @@ LABELS = {
         "phishing_tests": "Phish-prone % per phishing test (latest)",
         "training_completion": "Training completion per campaign (latest)",
         "groups": "Top {n} groups by risk score",
+        "modules": "Status per module (top {n} by enrolments)",
+        "reported_emails": "Emails reported to PhishER per month",
+        "reports": "Reports",
+        "enrolments": "Enrolments",
+        "enrolments_share": "% of enrolments (right: % passed · enrolments)",
+        "statuses": {"passed": "Passed", "in_progress": "In progress", "not_started": "Not started", "past_due": "Past Due"},
+        "group_trend": "Group {name}'s risk score over time",
+        "no_group": "Pick one group for this chart (group_id from group_risk_trend).",
         "no_history": "There is no risk score history to chart yet.",
         "no_data": "There is no KnowBe4 data for this chart yet.",
         "today": "today",
@@ -129,7 +150,7 @@ def _save(fig: Any) -> str:
 
 async def make_chart(
     kb: Any, console: str, chart: str, language: str = "id", user_id: int | None = None, limit: int = 10,
-    start_date: str | None = None, end_date: str | None = None,
+    start_date: str | None = None, end_date: str | None = None, group_id: int | None = None,
 ) -> dict[str, Any]:
     if problem := _bad_period(start_date, end_date):
         return {"error": True, "message": problem}
@@ -141,8 +162,14 @@ async def make_chart(
     try:
         summary: dict[str, Any] = {}
 
-        if chart == "risk_trend":
-            if user_id:
+        if chart in ("risk_trend", "group_trend"):
+            if chart == "group_trend":
+                if not group_id:
+                    return {"error": True, "message": t["no_group"]}
+                group = await kb.get_group(console, group_id)
+                history = await kb.get_group_risk_history(console, group_id, bool(start_date or end_date))
+                title = t["group_trend"].format(name=group.get("name") if isinstance(group, dict) else group_id)
+            elif user_id:
                 user = await kb.get_user(console, user_id)
                 history = await kb.get_user_risk_history(console, user_id, bool(start_date or end_date))
                 title = t["risk_trend_user"].format(name=_name(user) if isinstance(user, dict) else user_id)
@@ -223,6 +250,40 @@ async def make_chart(
             title = t["groups"].format(n=len(rows))
             summary = {"groups": [{"name": g["name"], "risk_score": g["risk_score"], "risk_level": g["risk_level"], "active_users": g["active_users"]} for g in rows[::-1]]}
 
+        elif chart == "reported_emails":
+            data = await reported_emails(kb, console, start_date=start_date, end_date=end_date)
+            months = data.get("per_month") or {}
+            ax.bar(list(months), list(months.values()), color=ACCENT)
+            for i, n in enumerate(months.values()):
+                ax.text(i, n, str(n), ha="center", va="bottom", fontsize=8)
+            ax.set_ylabel(t["reports"])
+            ax.tick_params(axis="x", labelsize=8, rotation=45)
+            title = t["reported_emails"]
+            summary = {"per_month": months, "by_category": data.get("by_category"), "still_open": data.get("still_open")}
+
+        elif chart == "modules":
+            # stacked statuses: bars of completion % alone were all empty when the lowest modules sat at 0%
+            data = await training_by_module(kb, console, None, "most_enrolled", limit)
+            rows = data.get("modules", [])[::-1]
+            fig.set_size_inches(8, max(3.2, 0.42 * len(rows) + 1.9))
+            # shares, not counts: one series with 1,548 enrolments squashed the other rows to slivers
+            left = [0.0] * len(rows)
+            for key in ("passed", "in_progress", "not_started", "past_due"):
+                values = [m[key] * 100 / m["enrolled"] if m["enrolled"] else 0 for m in rows]
+                ax.barh(range(len(rows)), values, left=left, color=STATUS_COLOURS[key], label=t["statuses"][key])
+                left = [a + b for a, b in zip(left, values, strict=True)]
+            ax.set_yticks(range(len(rows)), [_short(m["module"], 40) for m in rows], fontsize=8)
+            for i, m in enumerate(rows):
+                ax.text(101.5, i, f"{m['completion_percent'] or 0:.0f}% · {m['enrolled']}", va="center", fontsize=8)
+            ax.set_xlim(0, 118)
+            ax.set_xticks([0, 25, 50, 75, 100])
+            ax.set_xlabel(t["enrolments_share"])
+            ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.32 if len(rows) < 6 else -0.18), ncol=4, fontsize=8, frameon=False)
+            title = t["modules"].format(n=len(rows))
+            summary = {"modules": [{k: m[k] for k in ("module", "enrolled", "passed", "past_due", "not_started", "in_progress",
+                                                       "completion_percent")} for m in rows[::-1]],
+                       "bars": "stacked per module: passed, in progress, not started, Past Due; the % is completion"}
+
         else:  # training_completion
             campaigns = sorted((c for c in await kb.list_training_campaigns(console) if _within(c.get("start_date"), start_date, end_date)),
                                key=lambda c: str(c.get("start_date") or ""), reverse=True)[:limit]
@@ -289,6 +350,17 @@ async def export_csv(
             [c.get("campaign_id"), c.get("name"), c.get("status"), _date(c.get("start_date")), _date(c.get("end_date")), c.get("completion_percentage")]
             for c in await kb.list_training_campaigns(console) if _within(c.get("start_date"), start_date, end_date)
         ]
+    elif dataset == "modules":
+        # every module on its own row in the file, episodes included
+        data = await training_by_module(kb, console, None, "most_enrolled", 0, start_date, end_date, group_series=False)
+        header = ["module", "type", "enrolled", "passed", "past_due", "in_progress", "not_started", "completion_percent", "typical_minutes"]
+        rows = [[m["module"], m["type"], m["enrolled"], m["passed"], m["past_due"], m["in_progress"], m["not_started"],
+                 m["completion_percent"], m["typical_minutes"]] for m in data.get("modules", [])]
+    elif dataset == "reported_emails":
+        messages, _ = await _all_messages(kb, console)
+        header = ["reported_at", "subject", "from", "reported_by", "category", "severity", "status"]
+        rows = [[_date(m.get("reportedAt")), m.get("subject"), m.get("from"), m.get("reportedBy"), m.get("category"), m.get("severity"),
+                 m.get("actionStatus")] for m in messages if _within(m.get("reportedAt"), start_date, end_date)]
     else:  # risk_history
         history = [h for h in await (kb.get_user_risk_history(console, user_id, True) if user_id else kb.get_account_risk_history(console, True)) or []
                    if _within(h.get("date"), start_date, end_date)]

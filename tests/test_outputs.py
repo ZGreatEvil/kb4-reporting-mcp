@@ -40,6 +40,31 @@ class FakeKB:
     async def list_groups(self, console, status=None, max_records=None):
         return [{"id": 70, "name": "Finance", "current_risk_score": 44.0, "member_count": 1}]
 
+    async def get_group(self, console, group_id):
+        return {"id": 70, "name": "Finance", "current_risk_score": 44.0, "member_count": 1}
+
+    async def get_group_risk_history(self, console, group_id, full=False):
+        return list(HISTORY)
+
+    async def graph(self, console, product, document, variables=None):
+        # reported emails per month for the PhishER chart
+        return {"phisherMessages": {"pagination": {"totalCount": 3, "pages": 1}, "nodes": [
+            {"reportedAt": "2026-09-02T08:00:00Z", "category": "THREAT", "actionStatus": "RESOLVED"},
+            {"reportedAt": "2026-10-05T08:00:00Z", "category": "SPAM", "actionStatus": "RECEIVED"},
+            {"reportedAt": "2026-10-06T08:00:00Z", "category": "UNKNOWN", "actionStatus": "IN_REVIEW"},
+        ]}}
+
+    async def list_training_enrollments(self, console, **kwargs):
+        return [
+            {"module_name": "Phishing 101", "status": "Passed", "time_spent": 600, "user": {"id": 1}},
+            {"module_name": "Phishing 101", "status": "Past Due", "user": {"id": 2}},
+            {"module_name": "Passwords", "status": "Not Started", "user": {"id": 3}},
+        ]
+
+
+# charts that need an argument to draw anything
+CHART_ARGS = {"group_trend": {"group_id": 70}}
+
 
 @pytest.fixture(autouse=True)
 def tmp_dirs(monkeypatch, tmp_path):
@@ -50,7 +75,7 @@ def tmp_dirs(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("chart", outputs.CHARTS)
 async def test_every_chart_writes_a_png(tmp_dirs, chart):
-    result = await outputs.make_chart(FakeKB(), "main", chart, "en")
+    result = await outputs.make_chart(FakeKB(), "main", chart, "en", **CHART_ARGS.get(chart, {}))
     name = result["image_url"].rsplit("/", 1)[-1]
     assert result["image_url"] == f"/static/charts/{name}"
     data = (tmp_dirs / "charts" / name).read_bytes()

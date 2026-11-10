@@ -17,6 +17,7 @@ from agent.messages import DEFAULT_LANGUAGE, LANGUAGE_NAMES, msg
 from agent.normalise import normalise_with_fixes
 from agent.period import default_period, parse_period
 from config.settings import AppConfig, load_config
+from kb4_mcp.summaries import risk_level
 
 SYSTEM_PROMPT_TEMPLATE = """
 You are KnowBe4 Security Awareness Reporting Analyst.
@@ -39,8 +40,15 @@ Rules:
    user_risk_summary (one person's risk and history), find_user, list_users_page (lists of users),
    top_users_by_risk, compare_consoles_risk, phishing_campaign_summary, training_completion_summary,
    risk_by_group (groups, teams, departments), repeat_phishing_failures (people who failed several tests),
-   phishing_test_detail (one test: who clicked, who reported, report rate), overdue_training (Past Due training),
-   make_chart (charts), export_csv (files), search_nist (NIST guidance).
+   phishing_test_detail (one test: who clicked, who reported, report rate, how fast people failed), overdue_training
+   (Past Due training), training_by_module (progress per training module, course or video), training_library (which
+   training content the company has), group_risk_trend (a group's risk over time), sign_in_activity (who never signed in),
+   new_joiners (new employees), callback_phishing_summary (phone / callback phishing), make_chart (charts),
+   export_csv (files), search_nist (NIST guidance). When available: industry_benchmark (official industry benchmark),
+   reported_emails (emails employees reported as suspicious, PhishER), phisher_rules, usb_test_results,
+   physical_qr_results, simulation_overview (all campaign and simulation types), admin_audit_log (what admins changed),
+   security_coaching (Real-Time Coaching), password_risks (PasswordIQ), user_events (events from other security tools),
+   product_status (which KnowBe4 products are in use).
 5. Person questions: call find_user, then user_risk_summary with the id. "Full" or "selengkapnya" history
    also means user_risk_summary; the raw history is never shown. If several people match,
    list them numbered and ask which one.
@@ -75,6 +83,14 @@ Rules:
 20. Periods ("dari 2026", "tahun lalu", "3 bulan terakhir"): the tools get the period automatically and their results
     say which period they cover. Without a period in the question they cover the past 12 months. Say the period in
     your first line. Never mix in data from outside it.
+21. Training modules (modul, course, video, materi, a module's name): call training_by_module, with module set to words
+    from the module's name when the question names one. Progress (watched, passed, finished, not started, overdue,
+    time spent; "terbaik" = sort most_completed) is always training_by_module. For which content the company has, the newest
+    ("terbaru": sort newest) or what to recommend, call training_library; recommend only from its facts (new or never assigned).
+    Training campaigns are not modules; never answer a module question from training_completion_summary.
+22. Benchmark or industry comparisons: call industry_benchmark when it is available (KnowBe4's official figures per
+    industry and company size). Emails employees reported as suspicious in real life are reported_emails (PhishER);
+    who reported a phishing TEST is phishing_test_detail. If a tool says a product is not set up or has no data, say so.
 
 How to answer:
 - First line: a one-sentence direct answer in bold. Never answer with questions back, never say "it depends".
@@ -102,7 +118,14 @@ Definitions (KnowBe4):
 
 # exposed to mcp clients, but too open-ended for a small local model; the health check is an admin tool that
 # gives a bare score (the model once answered "risk score?" with it instead of account_risk_overview)
-HIDDEN_TOOLS = {"knowbe4_raw_get", "knowbe4_health_check"}
+HIDDEN_TOOLS = {"knowbe4_raw_get", "knowbe4_health_check", "refresh_data"}
+# the user explicitly wants fresh data, not the 10-minute copy; "tes phishing terbaru" (the latest test) is not this
+FRESH_ASK = re.compile(
+    r"\b(?:refresh\w*|reload\w*|re-?fetch\w*|perbarui\w*|segarkan|muat ulang|ambil ulang|tarik ulang|update (?:the )?data"
+    r"|data (?:yang )?(?:terbaru|terkini|paling baru|fresh|baru)|(?:fresh|new|latest|live|up[- ]to[- ]date) data"
+    r"|(?:jangan|tanpa) (?:pakai |pake |gunakan )?cache|no cache|(?:without|ignore|skip) (?:the )?cache|real[- ]?time)\b",
+    re.I,
+)
 # per earlier message sent back with a question
 HISTORY_CHARS = 2000
 # blocked in the same answer once find_user has asked "which one?"
@@ -116,6 +139,7 @@ RAW_LIST_TOOLS = {
     "list_users",
     "get_user_risk_score_history",
     "get_account_risk_score_history",
+    "get_group_risk_score_history",
     "list_training_enrollments",
     "list_phishing_recipients",
     "list_group_members",
@@ -213,6 +237,64 @@ def _with_users_table(answer: str, page: dict[str, Any], language: str) -> str:
 
 
 RISK_WORDS = re.compile(r"\b(risk|risiko|skor|score)\b", re.I)
+# a level written next to a risk score: "38.01 (level Medium)", "38,01 (Sedang)", "skor 38.01 dengan level Low"
+LEVEL_NEAR_SCORE = re.compile(
+    r"(?P<num>(?<![\d.,])\d{2}(?:[.,]\d+)?)(?![\d%])(?P<gap>[^.\n\d%|]{0,25}?(?:\(|\blevel\b|\btingkat\b)[^.\n\d%|]{0,12}?)"
+    r"(?P<level>Low|Medium|High|Critical|Rendah|Sedang|Tinggi|Kritis)\b",
+    re.I,
+)
+LEVEL_NAMES = {
+    "en": {"Low": "Low", "Medium": "Medium", "High": "High", "Critical": "Critical"},
+    "id": {"Low": "Rendah", "Medium": "Sedang", "High": "Tinggi", "Critical": "Kritis"},
+}
+INDONESIAN_LEVELS = {"rendah", "sedang", "tinggi", "kritis"}
+
+
+# misspellings the model wrote in indonesian answers ("Prodak KnowBe4", "Kampain", "Kampayan"); whole words only
+ANSWER_TYPOS = {"prodak": "produk", "kampain": "kampanye", "kampayan": "kampanye", "kampanya": "kampanye"}
+ANSWER_TYPO = re.compile(r"\b(" + "|".join(ANSWER_TYPOS) + r")\b", re.I)
+# 14.31 -> 14,31 (one or two decimals); never 2.233 (indonesian thousands), 1.64.1, ip addresses, 800-50r1 or dates
+ID_DECIMAL = re.compile(r"(?<![\w.,/-])(\d+)\.(\d{1,2})(?![\d\w]|\.\d)")
+
+
+def _fix_typos_in_answer(answer: str) -> str:
+    def fix(m: re.Match[str]) -> str:
+        right = ANSWER_TYPOS[m.group(1).lower()]
+        return right.capitalize() if m.group(1)[0].isupper() else right
+
+    def tidy(text: str) -> str:
+        # indonesian writes decimals with a comma; the model mixed "14.31%" with the risk line's "38,01"
+        return ID_DECIMAL.sub(r"\1,\2", ANSWER_TYPO.sub(fix, text))
+
+    # real names stay as KnowBe4 has them: quoted text ("Kampain Q3"), table rows and links are left alone
+    lines = []
+    for line in answer.split("\n"):
+        if line.lstrip().startswith("|") or "](" in line:
+            lines.append(line)
+            continue
+        parts = re.split(r'("[^"\n]*"|`[^`\n]*`|https?://\S+)', line)
+        lines.append("".join(p if p[:1] in ('"', "`") or p.startswith("http") else tidy(p) for p in parts))
+    return "\n".join(lines)
+
+
+def _fix_levels(answer: str) -> str:
+    """a level that contradicts KnowBe4's bands for the score next to it is corrected (the model once wrote
+    38.01 as Medium; 38 is Low). only in sentences about the risk score, never on percentages"""
+    def fix(m: re.Match[str]) -> str:
+        try:
+            score = float(m.group("num").replace(",", "."))
+        except ValueError:
+            return m.group(0)
+        right = risk_level(score) if 10 <= score <= 90 else None
+        written = m.group("level")
+        names = LEVEL_NAMES["id" if written.lower() in INDONESIAN_LEVELS else "en"]
+        if not right or names[right].lower() == written.lower():
+            return m.group(0)
+        return m.group("num") + m.group("gap") + names[right]
+
+    # sentences and lines, keeping every separator so the layout is untouched
+    parts = re.split(r"(\n|(?<=[.!?])[ \t]+)", answer)
+    return "".join(LEVEL_NEAR_SCORE.sub(fix, p) if RISK_WORDS.search(p) else p for p in parts)
 PERIOD_30 = re.compile(r"\b(30 hari|sebulan|satu bulan|1 bulan|30 days|a month|one month|last month)\b", re.I)
 PERIOD_90 = re.compile(r"\b(90 hari|tiga bulan|3 bulan|90 days|three months|3 months|quarter|kuartal)\b", re.I)
 
@@ -387,7 +469,86 @@ LAST_NOTE_TOOL = re.compile(r"\[Data used: (\w+)")
 REFETCH_TOOLS = {
     "account_risk_overview", "training_completion_summary", "phishing_campaign_summary", "overdue_training",
     "risk_by_group", "top_users_by_risk", "repeat_phishing_failures", "phishing_test_detail",
+    "training_by_module", "training_library", "group_risk_trend", "sign_in_activity", "new_joiners", "callback_phishing_summary",
+    "industry_benchmark", "reported_emails", "phisher_rules", "usb_test_results", "physical_qr_results", "simulation_overview",
+    "admin_audit_log", "security_coaching", "password_risks", "user_events", "product_status",
 }
+# topics only one tool answers: (question pattern, tool to call, tools that already answer it). the model once
+# answered module questions from training campaigns; when it skips the tool, the call is made in code
+# real emails employees reported (PhishER), not who reported a phishing test
+PHISHER_ASK = re.compile(
+    r"\b(?:phisher|email (?:yang )?(?:mencurigakan|dilaporkan|di-?report\w*)|reported (?:emails?|messages?)|suspicious emails?|"
+    r"phish alert|tombol (?:lapor|report)|email (?:asli|nyata) yang dilaporkan)\b",
+    re.I,
+)
+# whole words: "tim\w*" took "over time" for a team
+GROUP_WORD = r"\b(?:grup\w*|groups?|kelompok\w*|divisi\w*|departemen\w*|departments?|tim|teams?)\b"
+TREND_WORD = (r"\b(?:tren\w*|trend\w*|dari waktu ke waktu|over time|membaik|memburuk|getting (?:better|worse)|improv\w*"
+              r"|riwayat|history|naik|turun|perkembangan)\b")
+TOPIC_TOOLS = (
+    (re.compile(r"\b(?:apa saja|daftar|list|punya|tersedia|available|library|pustaka|katalog|catalog|dibeli|purchased|"
+                r"terbaru|newest|latest|rekomendasi\w*|recommend\w*)\b"
+                r"[^.?!]{0,40}\b(?:modul\w*|modules?|konten|content|materi|video\w*|courses?|kursus)\b"
+                r"|\b(?:modul\w*|modules?|konten|content|materi|courses?|kursus)\b[^.?!]{0,40}"
+                r"\b(?:apa saja|tersedia|available|yang (?:kita |kami )?punya|we have|purchased|dibeli)\b", re.I),
+     "training_library", {"training_library", "training_by_module"}),
+    (re.compile(r"\b(?:modul\w*|modules?|materi\w*|kursus|courses?|video\w*)\b", re.I),
+     "training_by_module", {"training_by_module"}),
+    (re.compile(r"\b(?:log ?in\w*|sign(?:ed)? ?in\w*|masuk ke knowbe4|belum pernah masuk)\b", re.I),
+     "sign_in_activity", {"sign_in_activity"}),
+    (re.compile(r"\b(?:karyawan|pegawai|pengguna|users?|staf|orang)\s+baru\b|\bnew\s+(?:joiners?|hires?|employees?|users?|staff|starters?)\b"
+                r"|\bbaru\s+(?:bergabung|masuk|join\w*)\b|\bjoiners?\b", re.I),
+     "new_joiners", {"new_joiners"}),
+    (re.compile(r"\b(?:callback|vishing|voice phishing|phone phishing|telepon|menelepon|nelpon|ditelepon)\b", re.I),
+     "callback_phishing_summary", {"callback_phishing_summary"}),
+    (re.compile(GROUP_WORD + r"[^.?!]{0,60}" + TREND_WORD + "|" + TREND_WORD + r"[^.?!]{0,60}" + GROUP_WORD, re.I),
+     "group_risk_trend", {"group_risk_trend"}),
+    (re.compile(r"\b(?:seberapa cepat|berapa cepat|secepat|paling cepat|tercepat|how (?:fast|quickly)|fastest|berapa lama)\b"
+                r"[^.?!]{0,50}\b(?:klik|click\w*|gagal|fail\w*|tertipu|kena)", re.I),
+     "phishing_test_detail", {"phishing_test_detail"}),
+    # product apis (skipped when the tool is not available)
+    (PHISHER_ASK, "reported_emails", {"reported_emails", "phisher_rules"}),
+    (re.compile(r"\b(?:benchmark\w*|industri\w*|industry|industries|rata-?rata (?:perusahaan|industri)|perusahaan lain|"
+                r"organisasi lain|other companies|peers?)\b", re.I),
+     "industry_benchmark", {"industry_benchmark"}),
+    (re.compile(r"\b(?:usb|flash ?dis[ck]|flashdrive|flash drive|thumb ?drive)\b", re.I), "usb_test_results", {"usb_test_results"}),
+    (re.compile(r"\b(?:qr (?:fisik|poster|physical)|physical qr|poster qr|kode qr fisik|qr di poster|qr code poster)\b", re.I),
+     "physical_qr_results", {"physical_qr_results"}),
+    (re.compile(r"\b(?:jenis (?:simulasi|kampanye|campaign)|simulasi apa (?:saja|aja)|semua simulasi|campaign types?|"
+                r"kinds? of (?:simulations?|campaigns?)|simulations? do we run)\b", re.I),
+     "simulation_overview", {"simulation_overview"}),
+    (re.compile(r"\b(?:audit ?log\w*|log admin|admin log|perubahan (?:admin|pengaturan|setting\w*)|siapa (?:yang )?(?:mengubah|ubah|ganti)|"
+                r"who changed|admin (?:changes|activity)|aktivitas admin)\b", re.I),
+     "admin_audit_log", {"admin_audit_log"}),
+    (re.compile(r"\b(?:real[- ]?time coaching|securitycoach|security coach|coaching)\b", re.I), "security_coaching", {"security_coaching"}),
+    (re.compile(r"\b(?:passwords?|kata sandi|passwordiq|sandi)\b", re.I), "password_risks", {"password_risks"}),
+    (re.compile(r"\b(?:user events?|custom events?|event (?:dari|from) (?:tool|alat)|dlp|edr)\b", re.I), "user_events", {"user_events"}),
+    (re.compile(r"\b(?:produk (?:knowbe4 )?(?:apa|mana)|knowbe4 products?|products? (?:are|do we)|lisensi|licen[cs]e)\b", re.I),
+     "product_status", {"product_status"}),
+    # last: a plain risk score question answered from the bare account record lost its level, trend and why
+    # (38.01 was once called Medium); any summary that already answers it counts
+    (re.compile(r"\b(?:risk ?score|skor risiko|risiko skor|skor risk|nilai risiko|tingkat risiko|risk level)\b", re.I),
+     "account_risk_overview", {"account_risk_overview", "user_risk_summary", "top_users_by_risk", "risk_by_group", "group_risk_trend",
+                               "list_users_page", "compare_consoles_risk", "find_user", "industry_benchmark", "new_joiners",
+                               "sign_in_activity", "make_chart", "export_csv", "search_nist"}),
+)
+OVERDUE_WORDS = re.compile(r"\b(?:telat|terlambat|overdue|past due|tenggat|lewat)\b", re.I)
+# "which content do we have" asks about the library; progress (watched, passed, not started) never does
+LIBRARY_TOPIC_EXCLUDES = re.compile(r"\b(?:belum|sudah|lulus|selesai\w*|ditonton|nonton|progres\w*|passed|finished|watched|completion|penyelesaian\w*)\b", re.I)
+
+
+def _topic_answered(topic: tuple[Any, str, set[str]], prompt: str, state: dict[str, Any]) -> bool:
+    """nothing to force: a tool that covers the topic was used, or it is a progress question, which the library
+    never answers. overdue training lists the most overdue modules, so it covers module questions about lateness,
+    not "how is completion of the modules from 2026" """
+    if topic[1] == "training_library" and LIBRARY_TOPIC_EXCLUDES.search(prompt):
+        return True
+    covered = set(topic[2])
+    if topic[1] == "training_by_module" and OVERDUE_WORDS.search(prompt):
+        covered.add("overdue_training")
+    return any(state.get(x) for x in covered)
+
+
 NAMED_PEOPLE = re.compile(r"(\d+)\. ([^,;\]]*?) \(id (\d+)\)")
 # a person referred to, not "-nya" on any word ("organisasinya")
 PERSON_PRONOUN = re.compile(r"\b(dia|beliau|orang itu|orangnya|he|she|him|her|his)\b", re.I)
@@ -397,6 +558,9 @@ FUTURE_ASK = re.compile(
     r"\b(depan|nanti|besok|akan datang|ke depannya|prediksi\w*|perkiraan|proyeksi|forecast\w*|predict\w*|future|next (?:week|month|quarter|year)|will)\b",
     re.I,
 )
+# a first line that already refuses a forecast in the model's own words
+PREDICT_WORD = re.compile(r"\b(?:prediksi\w*|memprediksi|meramal\w*|forecast\w*|predict\w*|perkira\w*)\b", re.I)
+NEGATION = re.compile(r"\b(?:tidak|tak|belum|bukan|cannot|can't|can ?not|unable|not able)\b", re.I)
 # not "laporan" (a report document) or "reporting"
 REPORT_ASK = re.compile(r"\b(report(?:ed|s|nya)?|report rate|(?:me)?lapor(?:kan|kannya|nya)?|dilaporkan)\b", re.I)
 PHISHING_TOPIC = re.compile(r"phish|phising|email palsu|simulasi", re.I)
@@ -434,11 +598,22 @@ CAPABILITY_ASK = re.compile(
 PERIOD_TOOLS = {
     "phishing_campaign_summary", "repeat_phishing_failures", "phishing_test_detail", "training_completion_summary",
     "overdue_training", "account_risk_overview", "user_risk_summary", "make_chart", "export_csv",
+    "training_by_module", "group_risk_trend", "new_joiners", "callback_phishing_summary",
+    "reported_emails", "admin_audit_log", "security_coaching", "user_events", "training_library",
+}
+# product tools and the api key each needs; hidden from the model when no console has that key
+PRODUCT_TOOLS = {
+    "industry_benchmark": "ksat", "usb_test_results": "ksat", "physical_qr_results": "ksat", "simulation_overview": "ksat",
+    "admin_audit_log": "ksat", "reported_emails": "phisher", "phisher_rules": "phisher", "security_coaching": "coach",
+    "password_risks": "piq", "user_events": "events",
 }
 # current status, not something that happened in a period: the default year is not applied
-NO_DEFAULT_PERIOD = {"overdue_training"}
+NO_DEFAULT_PERIOD = {"overdue_training", "training_by_module", "training_library"}
 # the chart attached when an answer used one of these tools and has none yet (first match wins)
 CHART_FOR_TOOL = (
+    ("reported_emails", "reported_emails"),
+    ("training_by_module", "modules"),
+    ("group_risk_trend", "groups"),
     ("risk_by_group", "groups"),
     ("top_users_by_risk", "top_users"),
     ("phishing_campaign_summary", "phishing_tests"),
@@ -492,6 +667,9 @@ class Agent:
                 continue
             if tool.name in RAW_LIST_TOOLS and not self.config.llm_expose_raw_lists:
                 continue
+            # a product tool without its key would only ever answer "not configured"
+            if tool.name in PRODUCT_TOOLS and not self._products().get(PRODUCT_TOOLS[tool.name]):
+                continue
             tools.append({
                 "type": "function",
                 "function": {
@@ -501,6 +679,15 @@ class Agent:
                 },
             })
         return tools
+
+    def _products(self) -> dict[str, bool]:
+        """which product apis at least one console has a key for"""
+        return {p: any(c.product_key(p) for c in self.config.consoles.values()) for p in ("ksat", "phisher", "piq", "coach", "events")}
+
+    def capability_text(self, language: str) -> str:
+        """the fixed "what can you do" answer, with a line for each product api that is configured"""
+        lines = [msg(f"capability_{p}", language) for p, on in self._products().items() if on]
+        return msg("capabilities", language, products="".join(f"{line}\n" for line in lines))
 
     def _check_console(self, args: dict[str, Any]) -> str | None:
         if "console" not in args:
@@ -659,6 +846,16 @@ class Agent:
                     state.setdefault("attachments", []).append(made)
         if name == "user_risk_summary" and not getattr(result, "is_error", False):
             state["summary_user_id"] = args.get("user_id")
+        if name == "training_by_module" and str(args.get("module") or "").strip():
+            # one module asked about: a chart of the lowest modules would not be about it
+            state["module_focus"] = True
+        if name == "group_risk_trend" and not getattr(result, "is_error", False):
+            try:
+                gid = json.loads(text).get("group_id")
+            except (ValueError, AttributeError):
+                gid = None
+            if isinstance(gid, int):
+                state["trend_group_id"] = gid
         if name in ("account_risk_overview", "user_risk_summary") and not getattr(result, "is_error", False):
             try:
                 summary = json.loads(text)
@@ -723,10 +920,32 @@ class Agent:
             return None
         if state.get("user_risk_summary") and str(state.get("summary_user_id") or "").isdigit():
             return {"console": console, "chart": "risk_trend", "user_id": int(state["summary_user_id"])}
+        if state.get("trend_group_id"):
+            return {"console": console, "chart": "group_trend", "group_id": state["trend_group_id"]}
         for tool, chart in CHART_FOR_TOOL:
+            if tool == "training_by_module" and state.get("module_focus"):
+                continue
             if state.get(tool):
                 return {"console": console, "chart": chart}
         return None
+
+    async def _refresh(self, session: Any) -> dict[str, Any]:
+        """refresh_data for every console with a key; returns whether any was refreshed and the oldest data age"""
+        refreshed, ages = False, []
+        for key, console in self.config.consoles.items():
+            if not console.has_api_key:
+                continue
+            try:
+                result = await session.call_tool("refresh_data", arguments={"console": key})
+                data = json.loads(self._mcp_result_text(result))
+            except Exception as exc:  # a failed refresh only means the answer may use the cached copy
+                print(f"[AGENT] Refresh failed for a console ({type(exc).__name__})", flush=True)
+                continue
+            refreshed = refreshed or bool(data.get("refreshed"))
+            if data.get("data_age_at_most_seconds") is not None:
+                ages.append(data["data_age_at_most_seconds"])
+        print(f"[AGENT] Fresh data asked: refreshed={refreshed}", flush=True)
+        return {"refreshed": refreshed, "age": max(ages) if ages else None}
 
     def _default_console(self) -> str | None:
         return next((k for k, c in self.config.consoles.items() if c.has_api_key), None)
@@ -756,7 +975,7 @@ class Agent:
             print("[AGENT] Typos corrected: " + ", ".join(f"{a} -> {b}" for a, b in typo_fixes), flush=True)
         if CAPABILITY_ASK.search(prompt):
             print("[AGENT] Capability question, answering with the fixed list", flush=True)
-            yield {"type": "done", "answer": msg("capabilities", language), "note": ""}
+            yield {"type": "done", "answer": self.capability_text(language), "note": ""}
             return
         max_loops = self.config.llm_max_tool_loops
 
@@ -767,6 +986,9 @@ class Agent:
             # "export semua pengguna ke csv" is an export, not a request to page through users
             list_intent = bool(LIST_ALL.search(prompt)) and not NOT_A_LIST.search(prompt)
             state: dict[str, Any] = {"prompt": prompt.lower(), "list_intent": list_intent, "language": language}
+            if FRESH_ASK.search(prompt) and any(t.name == "refresh_data" for t in listed.tools):
+                # asked for fresh data: drop the 10-minute copies before any tool runs (the server allows once a minute)
+                state["fresh"] = await self._refresh(session)
             # "dari 2026", "3 bulan terakhir": worked out here and given to every tool that can filter by date
             if period := parse_period(prompt):
                 state["period"] = period
@@ -867,11 +1089,15 @@ class Agent:
                         elif (NIST_ASK.search(prompt) or (GUIDANCE_ASK.search(prompt) and AWARENESS_TOPIC.search(prompt))) and not state.get("search_nist"):
                             # it answered a phish scale question from general knowledge, with no source
                             exact = msg("call_nist", language)
-                        elif (REPORT_ASK.search(prompt) and not state.get("phishing_test_detail")
+                        elif (REPORT_ASK.search(prompt) and not state.get("phishing_test_detail") and not PHISHER_ASK.search(prompt)
                               and PHISHING_TOPIC.search(prompt + " " + earlier_notes[-1500:])):
                             # "terus yg report brp?" once got the previous answer repeated; only this tool knows who reported
                             exact = msg("call_report", language)
                             call = ("phishing_test_detail", {"console": console})
+                        elif topic := next((t for t in TOPIC_TOOLS if t[1] in tool_names and t[0].search(prompt)
+                                            and not _topic_answered(t, prompt, state)), None):
+                            exact = msg("call_topic", language, tool=topic[1])
+                            call = (topic[1], {"console": console})
                         elif (WHY_ASK.search(prompt) and not state.get("data_tools")
                               and (last := LAST_NOTE_TOOL.findall(earlier_notes)) and last[-1] in REFETCH_TOOLS):
                             # "yg 0% itu kenapa" once got a reason made up without looking at the data again
@@ -959,6 +1185,12 @@ class Agent:
                         # only today's state was used (rankings, groups): say the period could not apply
                         answer = f"{answer}\n\n*{msg('period_current_only', language, period=state['period'].label())}*"
                     no_prediction = f"**{msg('no_prediction', language)}**"
+                    if FUTURE_ASK.search(prompt) and no_prediction not in answer:
+                        # its own wording ("Saya tidak bisa memprediksi nilai risiko untuk bulan depan") instead of the fixed line;
+                        # only a first line that already refuses is replaced, never a real answer
+                        head, _, tail = answer.partition("\n")
+                        if PREDICT_WORD.search(head) and NEGATION.search(head):
+                            answer = f"{no_prediction}\n{tail}".strip()
                     if no_prediction in answer and not FUTURE_ASK.search(prompt):
                         # nobody asked about the future: the refusal line is noise there
                         answer = re.sub(r"\n*" + re.escape(no_prediction) + r"[ \t]*\n*", "\n\n", answer).strip()
@@ -974,6 +1206,9 @@ class Agent:
                     # a forecast question opens with the no-prediction line, which mentions the risk score too
                     if len(state.get("risk_summaries") or []) == 1 and not state.get("users_page") and not FUTURE_ASK.search(prompt):
                         answer = _with_risk_line(answer, state["risk_summaries"][0], language, asked_period=None if state.get("default_period") else state.get("period"))
+                    answer = _fix_levels(answer)
+                    if language == "id":
+                        answer = _fix_typos_in_answer(answer)
                     if state.get("ask_user") and "?" not in answer:
                         answer += "\n\n" + msg("which_one", language)
                     if state.get("users_page"):
@@ -995,6 +1230,9 @@ class Agent:
                     answer = re.sub(r"\n{3,}", "\n\n", MODEL_LINK.sub("", MODEL_IMAGE.sub("", answer))).strip()
                     if state.get("attachments"):
                         answer = _with_attachments(answer, state["attachments"], language)
+                    if (fresh := state.get("fresh")) and state.get("kb4_data") and answer.strip():
+                        note = msg("fresh_data", language) if fresh["refreshed"] or fresh["age"] is None else msg("fresh_recent", language, seconds=fresh["age"])
+                        answer = f"{answer.strip()}\n\n*{note}*"
                     answer = answer.strip() or msg("no_answer", language)
                     print("[AGENT] Final answer generated", flush=True)
                     notes = state.get("notes") or []

@@ -259,5 +259,5 @@ async def test_numbers_without_tool_are_reset_in_stream(monkeypatch):
     types = [e["type"] for e in events]
     assert types[:3] == ["thinking", "delta", "reset"]
     assert session.calls == ["get_account"]
-    assert events[-1]["answer"] == "Skor 39.4"
+    assert events[-1]["answer"] == "Skor 39,4"
     assert "get_account" in events[-1]["note"]

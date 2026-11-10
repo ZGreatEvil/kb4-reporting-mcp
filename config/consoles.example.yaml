@@ -2,11 +2,20 @@
 # each console needs: display_name, region (us, eu, ca, uk or de) and api_key_env,
 # the name of the .env variable that holds that console's Reporting API key.
 # a console whose key is missing is listed as unavailable.
+# optional product api keys unlock more answers; leave out the ones you do not have:
+#   ksat_key_env     KSAT GraphQL (industry benchmarks, USB / QR tests, campaign types, audit log, AIDA)
+#   phisher_key_env  PhishER (emails users reported)
+#   piq_key_env      PasswordIQ
+#   coach_key_env    Real-Time Coaching
+#   events_key_env   User Event API (events pushed in by other security tools)
+# prefer keys with a read-only scope; the bot only ever reads.
 consoles:
   main:
     display_name: Main Company
     region: us
     api_key_env: KB4_MAIN_API_KEY
+    # ksat_key_env: KB4_MAIN_KSAT_KEY
+    # phisher_key_env: KB4_MAIN_PHISHER_KEY
   subsidiary:
     display_name: Subsidiary
     region: us

@@ -14,6 +14,8 @@ One-time setup
 6. Settings:              Copy-Item .env.example .env
                           Copy-Item config\consoles.example.yaml config\consoles.yaml
                           add your consoles to consoles.yaml and their Reporting API keys to .env
+   Optional product keys:  KSAT, PhishER, PasswordIQ, Real-Time Coaching, User Event (KnowBe4 Account Settings > API,
+                          read-only scopes); put them in .env and name them in consoles.yaml (README "Product API tools")
 7. Check the keys:        .\.venv\Scripts\python.exe test_knowbe4.py
 8. Check the model:       ollama run kb4-analyst --think=false "Reply with just the word OK."
                           ollama ps   (should say 100% GPU and 32768)

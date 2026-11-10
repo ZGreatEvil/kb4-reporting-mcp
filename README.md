@@ -15,7 +15,9 @@ A local, read-only MCP server and web chat application for KnowBe4 Reporting API
 - Local LLM chat agent (any OpenAI-compatible server: Ollama, LM Studio, llama.cpp, vLLM) using the same read-only tools over MCP
 - Simple local web chat UI
 - Charts (line, bar, pie) drawn with matplotlib and CSV exports, both produced in code from KnowBe4 data
-- Group and department breakdowns, repeat phishing clickers, one phishing test in detail (who clicked, who reported it, report rate) and overdue training
+- Group and department breakdowns, repeat phishing clickers, one phishing test in detail (who clicked, who reported it, report rate, how fast) and overdue training
+- Training per module and the training content library, group risk trends, who never signed in, new joiners and callback (phone) phishing
+- With optional product API keys: KnowBe4's official industry benchmarks, emails employees reported (PhishER), USB and physical QR tests, all campaign types, the admin audit log, Real-Time Coaching, PasswordIQ and events from other security tools
 - Answers on security awareness guidance from three NIST publications, with page citations, searched locally
 - Periods in the question ("dari 2026", "3 bulan terakhir", "last quarter"), applied to every tool that can filter by date; without one, the past 12 months
 - Casual Indonesian and English, chat spellings, uncommon words and typos ("brp yg nunggak trainnig") understood
@@ -164,7 +166,7 @@ The `LLM_*` defaults already point at Ollama on this machine:
 | `LLM_EXPOSE_RAW_LISTS` | `false` | Hides raw user lists and full risk histories (up to 1,000 points) from the chat model; the summary tools cover them |
 | `LLM_HISTORY_MESSAGES` | `6` | Earlier messages sent with each question, so follow-ups such as "2" or "show 20 more" work. Kept only in the open page |
 | `KB4_RATE_LIMIT_RPS` | `0.8` | KnowBe4 requests per second (about 48 a minute) |
-| `KB4_CACHE_SECONDS` | `600` | KnowBe4 answers are reused for this long, so repeat and follow-up questions cost no requests. `0` always fetches fresh |
+| `KB4_CACHE_SECONDS` | `600` | KnowBe4 answers are reused for this long, so repeat and follow-up questions cost no requests. `0` always fetches fresh. A question that asks for fresh data ("ambil data terbaru", "refresh", "jangan pakai cache", "fetch fresh data") skips the copy for that answer, at most once a minute per console |
 | `KB4_DAILY_LIMIT` | empty | Requests per console per rolling 24 hours. Empty uses KnowBe4's limit: 2,000 plus the account's licensed seats |
 | `WEB_ALLOWED_HOSTS` | empty | Extra host names the web chat answers to, comma-separated (for a LAN or Docker demo). `127.0.0.1` and `localhost` always work; any other name gets "Invalid host header" |
 | `KB4_CONSOLES_FILE` | empty | Path to a consoles file other than `config/consoles.yaml` |
@@ -223,6 +225,8 @@ Expected output is similar to:
 
 If you get `401`, the token is wrong, expired or revoked, or belongs to a different API type. Reporting API keys are separate from User Event API keys.
 
+Product API keys named in `consoles.yaml` are checked too, one line each, with the smallest read-only query, for example `{'console': 'main', 'product': 'PhishER', 'status': 'ok'}`.
+
 ## 7. Start the MCP server
 
 Once, before the first start, build the NIST library:
@@ -259,7 +263,7 @@ Make sure Ollama is running (`ollama ps` answers), then in a second terminal:
 .\.venv\Scripts\python.exe run_web.py
 ```
 
-Check `http://127.0.0.1:8080/health`: it should show `"status": "ok"` with `"reachable": true` and `"model_pulled": true` under `llm`, and `"reachable": true` under `mcp`. `"degraded"` means Ollama is not running, the model has not been created (README step 3), the MCP server is down, or the loaded model has less context than the app needs; `warnings` says which. The status badge in the page header shows the same thing.
+Check `http://127.0.0.1:8080/health`: it should show `"status": "ok"` with `"reachable": true` and `"model_pulled": true` under `llm`, and `"reachable": true` under `mcp`. `"degraded"` means Ollama is not running, the model has not been created (README step 3), the MCP server is down, or the loaded model has less context than the app needs; `warnings` says which. `product_apis` lists which optional product API keys each console has (names only). The MCP tool `list_consoles` also shows each product's requests in the last 24 hours. The status badge in the page header shows the same thing.
 
 On the first visit the page asks for a language, **Bahasa Indonesia** or **English**. The choice is remembered in that browser and can be changed any time with the **ID | EN** switch in the header. It sets the page text and the language the model answers in. Other clients can pass it to the API directly: `POST /api/chat` with `{"message": "...", "language": "id"}` or `"en"` (default `id`; anything else is rejected with HTTP 422).
 
@@ -284,7 +288,7 @@ Questions about NIST guidance are answered from the NIST library, with a **Sumbe
 
 **Periods.** Questions about a period ("dari 2026", "tahun lalu", "3 bulan terakhir", "Q3 2026", "since January", "antara Maret dan Juni 2026", "sebelum 2026") are read in code, not by the model, and the dates go to every tool that can filter: phishing tests, repeat clickers, one test in detail, training completion, overdue training (by enrolment date), risk trends, charts and CSV exports. The answer says the period it covers. **Without a period in the question, over-time data covers the past 12 months**, not everything since the account began; overdue training is the exception, because an unfinished enrolment from years ago is still overdue today. Rankings of people and groups are today's state, which KnowBe4 does not keep per period; the answer then says so. The model is also told today's date, so it never treats this year as the future.
 
-**Casual wording.** Chat spellings, slang and less common words are spelled out before the model reads the question ("brp yg nunggak training" becomes "berapa yang terlambat training"), and typos of the words the bot works with are corrected ("trainnig yg terlmbat", "rsik scroe"). The corrector fixes one missing, extra or swapped letter, only towards the bot's own words, and leaves names, acronyms, links and real words alone; on the 3,505 distinct words of the NIST PDFs it changed none. Short follow-ups that lean on the chat ("kalau grup?", "dia ada training yg telat?", "sama kayak tadi tapi buat tahun lalu") are understood from the earlier messages and the short notes kept with each answer; "dia" right after a search that found several people gets "which one?" instead of a guess. In live tests, the right data was used for 53 of 53 casual and dated questions and 42 of 42 questions with slang, uncommon words and typos, and the right period reached the tools for all 19 dated ones. Restating follow-ups with an extra model call first was also tried: it was slower and got 3 of them wrong, so it is not used.
+**Casual wording.** Chat spellings, slang and less common words are spelled out before the model reads the question ("brp yg nunggak training" becomes "berapa yang terlambat training"), and typos of the words the bot works with are corrected ("trainnig yg terlmbat", "rsik scroe"). The corrector fixes one missing, extra or swapped letter, only towards the bot's own words, and leaves names, acronyms, links and real words alone; on the 3,505 distinct words of the NIST PDFs it changed none. Short follow-ups that lean on the chat ("kalau grup?", "dia ada training yg telat?", "sama kayak tadi tapi buat tahun lalu") are understood from the earlier messages and the short notes kept with each answer; "dia" right after a search that found several people gets "which one?" instead of a guess. In live tests, the right data was used for 53 of 53 casual and dated questions, 42 of 42 questions with slang, uncommon words and typos, 22 of 22 questions about training modules and 20 of 20 questions about the product APIs, and the right period reached the tools for all 21 dated ones. Restating follow-ups with an extra model call first was also tried: it was slower and got 3 of them wrong, so it is not used.
 
 Risk score answers start with a line built from the data (score and level now, the value 30 and 90 days ago, and the asked period's change), so the periods are never mixed up; "apa saja yang bisa kamu lakukan?" / "what can you do?" gets a fixed list of what the bot does.
 
@@ -356,7 +360,7 @@ The server provides dedicated tools for the documented Reporting API resource fa
 
 - Account + account risk score history
 - Users + specific user + user risk score history
-- Groups + specific group + group members
+- Groups + specific group + group members + group risk score history
 - Phishing campaigns + campaign detail
 - Phishing Security Tests + PST detail
 - PST recipients + individual recipient
@@ -382,13 +386,43 @@ These fetch the full collection, do the sorting and arithmetic in Python and ret
 | `account_risk_overview(console, start_date, end_date)` | Current score and KnowBe4 level, change vs 30 and 90 days ago, 3-month figures, and the data behind "why" (phishing failures, users per level, comparison with KnowBe4's benchmark) |
 | `user_risk_summary(console, user_id, start_date, end_date)` | The same for one person, plus their training status (for example how many enrolments are Past Due) |
 | `list_users_page(console, status, sort, offset, limit)` | One page of at most 20 users with the total and `next_offset`, so "show more" works |
-| `make_chart(console, chart, user_id, limit, start_date, end_date)` | A PNG chart (`risk_trend`, `users_by_level`, `top_users`, `phishing_tests`, `training_completion`) and a short summary of what it shows |
-| `export_csv(console, dataset, user_id, status, start_date, end_date)` | A CSV download link for `users`, `phishing_tests`, `training_campaigns` or `risk_history` |
+| `make_chart(console, chart, user_id, limit, start_date, end_date, group_id)` | A PNG chart (`risk_trend`, `users_by_level`, `top_users`, `phishing_tests`, `training_completion`, `groups`, `modules`, `group_trend`) and a short summary of what it shows |
+| `export_csv(console, dataset, user_id, status, start_date, end_date)` | A CSV download link for `users`, `phishing_tests`, `training_campaigns`, `risk_history`, `modules` (every module's progress) or `reported_emails` (PhishER; needs its key) |
 | `search_nist(query, limit)` | The best-matching passages from the local NIST library, with publication and PDF page |
 | `risk_by_group(console, by, limit)` | Groups (or `department` / `location` / `division`) ranked by risk, with members and phish-prone % |
 | `repeat_phishing_failures(console, tests, limit, start_date, end_date)` | People who failed two or more of the latest tests (1 request per test, cached) |
-| `phishing_test_detail(console, pst_id, limit, start_date, end_date)` | One test person by person: who failed, who reported it, report rate (latest test by default) |
+| `phishing_test_detail(console, pst_id, limit, start_date, end_date)` | One test person by person: who failed, who reported it, report rate, how fast people failed (minutes from delivery), who opened but did nothing, bounces (latest test by default) |
 | `overdue_training(console, limit, start_date, end_date)` | Past Due enrolments of current users: total, people with the most, modules |
+| `training_by_module(console, module, sort, limit, start_date, end_date)` | Per training module: enrolled, passed, Past Due, not started, in progress, completion %, typical minutes and data-backed facts; episodes of one series are one row; `module` (words from its name) focuses on one module or series, lists each episode and who is overdue |
+| `training_library(console, content_type, limit, sort, start_date, end_date)` | The training content the account has (store purchases): types, length, KnowBe4 publish date, date added to the account, retired, enrolments, and content never assigned; `sort` = `most_used`, `newest` or `recently_purchased`; a period keeps what was published or added in it |
+| `group_risk_trend(console, group, limit, start_date, end_date)` | One group's risk score over time, or the 90-day change of the riskiest groups (1 request per group) |
+| `sign_in_activity(console, limit)` | Active users who never signed in to KnowBe4 and those who have not for over 90 days |
+| `new_joiners(console, limit, start_date, end_date)` | People who joined in the period (employee start date, or when they were added to KnowBe4) against everyone else: risk, phishing, Past Due training |
+| `callback_phishing_summary(console, limit, start_date, end_date)` | Callback (phone) phishing: calls to the number and data given on the call |
+
+`time_spent` on enrolments and the content `duration` have no unit in KnowBe4's docs; `time_spent` only makes sense as seconds against 4–10 minute modules (median 396 on the test account), so it is shown as minutes = value ÷ 60, and the content length is shown as listed.
+
+### Product API tools (optional keys)
+
+KnowBe4's developer site also documents GraphQL APIs (KSAT, PhishER, PasswordIQ, Real-Time Coaching) and a User Event API. Each needs its own key, generated in KnowBe4 under **Account Settings → API** (prefer the read-only scopes): add it to `.env` and name it in `consoles.yaml` with `ksat_key_env`, `phisher_key_env`, `piq_key_env`, `coach_key_env` or `events_key_env` (see `config/consoles.example.yaml`). Every GraphQL product is served at the console's site (`https://training.knowbe4.com/graphql` for US accounts, `eu.`, `ca.`, `uk.`, `de.knowbe4.com/graphql` elsewhere); the User Event API at `https://api.events.knowbe4.com` (or `api-eu.events…` and so on).
+
+These APIs can also change and delete data. The client only sends fixed read-only queries written in `kb4_mcp/products.py`, with values passed as variables, and `knowbe4.client.readonly_query` refuses any document that contains a `mutation` or `subscription` before it is sent; the User Event API is only ever read (`GET /events`). KnowBe4 limits GraphQL queries to a complexity of 150; the queries here stay under it. Their requests are cached like the Reporting API's (and dropped by "refresh"), and counted per product (`console:ksat`, `console:phisher`, …) apart from the Reporting API's daily limit, because KnowBe4 does not document limits for them.
+
+| Tool | Key | Returns |
+| --- | --- | --- |
+| `industry_benchmark(console, industry)` | KSAT | Our average phish-prone % against KnowBe4's official benchmark for the account's industry and company size (before training, after 90 days, after 1–3 years); another industry by name. Falls back to all industries when the account's benchmark industry is not one KnowBe4 benchmarks |
+| `simulation_overview(console)` | KSAT | Every phishing campaign by type (standard, callback, vishing), active ones, latest runs, USB and physical QR tests, AIDA, Second Chance |
+| `usb_test_results(console, limit)` | KSAT | USB drive tests: files opened, macros enabled, who |
+| `physical_qr_results(console)` | KSAT | Physical QR code tests: scans and data entered per location |
+| `admin_audit_log(console, category, limit, start_date, end_date)` | KSAT | What admins changed, by whom and when (default the last 90 days) |
+| `reported_emails(console, category, status, limit, start_date, end_date)` | PhishER | Emails employees reported as suspicious: threat / spam / clean / not yet triaged, still open, per month, top reporters, latest |
+| `phisher_rules(console, limit)` | PhishER | Rules, active or not, and how many reported emails each matched |
+| `security_coaching(console, start_date, end_date)` | Real-Time Coaching | Setup (what is missing), coaching sent, people coached, repeat offenders |
+| `password_risks(console)` | PasswordIQ | Weak, shared, breached or never-expiring Active Directory passwords from the last scan, or that it never scanned |
+| `user_events(console, user_email, limit, start_date, end_date)` | User Event | Events other security tools pushed in, by type, source and person |
+| `product_status(console)` | any | Which products are connected and actually in use |
+
+A product tool is only offered to the chat model when a console has that product's key, and the "what can you do?" answer lists only those products. Checked live on the test account (10 Nov 2026): 59 reported emails, 5 PhishER rules, 2 USB tests, 1 physical QR test, 69 campaigns, an audit log, AIDA on; PasswordIQ never scanned, Real-Time Coaching without a campaign, no user events. The User Event field names (`event_type`, `target_user`, `source`, `occurred_date`) come from the API's event schema; there were no events to check them against.
 
 Dates are `YYYY-MM-DD`; anything else (or a start after the end) is refused with a clear message, since a loose date would filter silently wrong. The summary tools return a `headline`: one sentence built in code from the data, which the model starts its answer from, so names, numbers and periods are never garbled.
 

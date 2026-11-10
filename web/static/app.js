@@ -123,6 +123,25 @@
   }, true);
   chat.addEventListener('scroll', () => { chat.dataset.follow = nearBottom() ? '1' : '0'; }, { passive: true });
 
+  function markTableEdges(wrap) {
+    const hidden = wrap.scrollWidth - wrap.clientWidth;
+    wrap.classList.toggle('more-right', hidden > 1 && wrap.scrollLeft < hidden - 1);
+    wrap.classList.toggle('more-left', hidden > 1 && wrap.scrollLeft > 1);
+  }
+  // after the window or phone turns; the table itself is watched too
+  const tableObserver = new ResizeObserver((entries) => entries.forEach((entry) => {
+    markTableEdges(entry.target.closest('.table-wrap'));
+  }));
+  // called right after an answer is put on the page. measuring here is synchronous; waiting for a frame or the
+  // observer's first report came too late in webkit, and observations made in the inert template were dropped
+  function activateTables(root) {
+    root.querySelectorAll('.table-wrap').forEach((wrap) => {
+      markTableEdges(wrap);
+      tableObserver.observe(wrap);
+      if (wrap.firstElementChild) tableObserver.observe(wrap.firstElementChild);
+    });
+  }
+
   // model output is untrusted html once rendered; it is cleaned as a string and parsed in an inert
   // <template>, so hostile markup never touches the live page. tables get a wrapper so they scroll
   function renderMarkdown(text) {
@@ -137,6 +156,8 @@
       wrap.tabIndex = 0;
       table.replaceWith(wrap);
       wrap.appendChild(table);
+      // a cut-off last column read as broken text: fade the side that has more table, on first layout and on scroll
+      wrap.addEventListener('scroll', () => markTableEdges(wrap), { passive: true });
     });
     return fragment;
   }
@@ -263,6 +284,7 @@
       wrapper.appendChild(bubble);
     }
     chat.appendChild(wrapper);
+    if (isMarkdown) activateTables(bubble);
     lucide.createIcons();
     toBottom(true);
     return bubble;
@@ -359,6 +381,7 @@
     };
     const renderAnswer = (text) => {
       chat.dataset.follow = keepBottom(() => bubble.replaceChildren(renderMarkdown(text))) ? '1' : '0';
+      activateTables(bubble);
     };
 
     const handle = (ev) => {

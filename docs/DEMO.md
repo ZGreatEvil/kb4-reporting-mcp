@@ -42,6 +42,27 @@ Answers take roughly 5–30 seconds; the page shows what the bot is doing ("Berp
 | 9 | Siapa yang klik email phishing terakhir, dan berapa yang melaporkannya? | Who failed the latest test and how, who reported it, and the **report rate**. |
 | 10 | Berapa training yang sudah lewat tenggat dan siapa yang paling banyak? | Past Due enrolments with the percentage, the people with the most and the modules most often overdue. |
 
+## 3a. Modules, sign-ins and new joiners
+
+| # | Prompt | What the audience should see |
+| --- | --- | --- |
+| 10d | Modul training mana yang paling sedikit diselesaikan? | Modules ranked by completion with Passed / Past Due / not started, typical minutes, and a chart of completion per module. |
+| 10e | Modul [module name] berapa yang sudah lulus? | That one module: enrolments, passed, Past Due, typical time, and who is overdue. |
+| 10f | Konten training apa saja yang kita punya? | The content library by type, retired items and content never assigned. |
+| 10g | Siapa yang belum pernah login ke KnowBe4? | How many active users never signed in, and who. |
+| 10h | Karyawan baru gimana risikonya? | People who joined in the past year against everyone else. |
+| 10i | Tren risiko grup [group name] gimana? | The group's risk now, 30 and 90 days ago, and a line chart. |
+
+## 3c. With product API keys (optional)
+
+| # | Prompt | What the audience should see |
+| --- | --- | --- |
+| 10j | Phish-prone kita dibanding benchmark industri gimana? | Our figure against KnowBe4's official benchmark for the industry and company size, stage by stage. |
+| 10k | Berapa email mencurigakan yang dilaporkan karyawan? | Emails reported to PhishER: threat, spam, clean, not yet triaged, still open, and a chart per month. |
+| 10l | Jenis simulasi apa saja yang pernah kita jalankan? | Phishing campaigns by type, USB and physical QR tests, AIDA. |
+| 10m | Siapa admin yang paling sering mengubah pengaturan? | The audit log: changes per category and per admin, latest changes. |
+| 10n | Produk KnowBe4 apa saja yang aktif? | Which products are connected and which are actually in use. |
+
 ## 3b. Periods and casual questions
 
 | # | Prompt | What the audience should see |

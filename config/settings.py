@@ -19,6 +19,30 @@ REGION_BASE_URLS = {
     "uk": "https://uk.api.knowbe4.com",
     "de": "https://de.api.knowbe4.com",
 }
+# from developer.knowbe4.com (Nov 2026): every graph api (KSAT, PhishER, PasswordIQ, Real-Time Coaching) is served
+# at the console's own site; the product api key decides which product answers
+REGION_GRAPH_URLS = {
+    "us": "https://training.knowbe4.com/graphql",
+    "eu": "https://eu.knowbe4.com/graphql",
+    "ca": "https://ca.knowbe4.com/graphql",
+    "uk": "https://uk.knowbe4.com/graphql",
+    "de": "https://de.knowbe4.com/graphql",
+}
+REGION_EVENTS_URLS = {
+    "us": "https://api.events.knowbe4.com",
+    "eu": "https://api-eu.events.knowbe4.com",
+    "ca": "https://api-ca.events.knowbe4.com",
+    "uk": "https://api-uk.events.knowbe4.com",
+    "de": "https://api-de.events.knowbe4.com",
+}
+# optional product api keys per console: name in consoles.yaml -> what it unlocks
+PRODUCTS = {
+    "ksat": "ksat_key_env",
+    "phisher": "phisher_key_env",
+    "piq": "piq_key_env",
+    "coach": "coach_key_env",
+    "events": "events_key_env",
+}
 
 
 # values like "xxxxxxxx" or "your-key-here" in .env count as no key
@@ -32,6 +56,12 @@ class ConsoleConfig(BaseModel):
     display_name: str
     region: str = "us"
     api_key_env: str
+    # product api keys (KSAT, PhishER, PasswordIQ, Real-Time Coaching graph apis; User Event api); all optional
+    ksat_key_env: str | None = None
+    phisher_key_env: str | None = None
+    piq_key_env: str | None = None
+    coach_key_env: str | None = None
+    events_key_env: str | None = None
 
     @field_validator("region")
     @classmethod
@@ -46,6 +76,20 @@ class ConsoleConfig(BaseModel):
     @property
     def base_url(self) -> str:
         return REGION_BASE_URLS[self.region]
+
+    @property
+    def graph_url(self) -> str:
+        return REGION_GRAPH_URLS[self.region]
+
+    @property
+    def events_url(self) -> str:
+        return REGION_EVENTS_URLS[self.region]
+
+    def product_key(self, product: str) -> str | None:
+        """the product api key from .env, or None when it is not configured (or a placeholder)"""
+        env = getattr(self, PRODUCTS[product])
+        value = os.getenv(env, "").strip() if env else ""
+        return value if value and not PLACEHOLDER_KEY.match(value) else None
 
     @property
     def has_api_key(self) -> bool:

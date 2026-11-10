@@ -77,7 +77,8 @@ security simulasi simulation efektivitas efektif effective effectiveness menguku
 menurunkan mengurangi lower reduce average benchmark paling lebih sekali semua daftar riskiest highest lowest
 tertinggi terendah modul module modules enrolment enrollment departemen department rentan vulnerable hasil result
 results tes test tests email palsu people rate rates finished completed kapabilitas kemampuan
-fitur bantuan pertama terbanyak terbaru lanjut berikutnya
+fitur bantuan pertama terbanyak terbaru lanjut berikutnya modul module modules materi konten library callback telepon
+login penyelesaiannya tercepat video videos
 """
 # real words that look like a typo of a VOCAB word, and everything spelled out above: never corrected
 COMMON = """

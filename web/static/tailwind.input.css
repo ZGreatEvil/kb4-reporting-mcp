@@ -94,6 +94,18 @@
 .prose-ai pre code { background: transparent; color: inherit; padding: 0; }
 /* wide tables scroll inside the bubble instead of being cut off */
 .prose-ai .table-wrap { overflow-x: auto; margin: 0.75rem 0; -webkit-overflow-scrolling: touch; }
+/* a cut-off last column read as broken text: the side with more table fades out (classes set by app.js on
+   layout and scroll), and the scrollbar is visible; touch screens hide scrollbars, so the fade is the cue there */
+.prose-ai { --thumb: rgba(100, 116, 139, 0.6); }
+@media (prefers-color-scheme: dark) {
+  .prose-ai { --thumb: rgba(148, 163, 184, 0.6); }
+}
+.prose-ai .table-wrap { scrollbar-width: thin; scrollbar-color: var(--thumb) transparent; padding-bottom: 4px; }
+.prose-ai .table-wrap::-webkit-scrollbar { height: 8px; }
+.prose-ai .table-wrap::-webkit-scrollbar-thumb { background: var(--thumb); }
+.prose-ai .table-wrap.more-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent); }
+.prose-ai .table-wrap.more-left { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 48px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 48px), transparent); }
+.prose-ai .table-wrap.more-left.more-right { -webkit-mask-image: linear-gradient(to right, transparent, #000 48px, #000 calc(100% - 48px), transparent); mask-image: linear-gradient(to right, transparent, #000 48px, #000 calc(100% - 48px), transparent); }
 .prose-ai table { min-width: 100%; border-collapse: collapse; font-size: 0.875rem; overflow-wrap: normal; }
 .prose-ai th, .prose-ai td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; }
 .prose-ai th { white-space: nowrap; }

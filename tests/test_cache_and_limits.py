@@ -200,6 +200,13 @@ async def test_tool_client_raises_tool_error(monkeypatch):
     kb._limiters["main"] = AsyncRateLimiter(1000)
     with pytest.raises(ToolError, match="API key was rejected"):
         await kb.get("main", "/v1/account")
+    # product checks too: an unknown console or a missing key reads as a sentence, not the sdk's masked error
+    with pytest.raises(ToolError, match="Unknown console"):
+        kb.has_product("nope", "ksat")
+    with pytest.raises(ToolError, match="not configured"):
+        await kb.graph("main", "ksat", "query { account { id } }")
+    with pytest.raises(ToolError, match="read-only"):
+        await kb.graph("main", "ksat", "mutation { x }")
 
 
 def test_agent_passes_tool_error_text_to_model():
@@ -251,3 +258,43 @@ def test_corrupt_counter_file_starts_fresh_and_is_repaired(tmp_path):
     assert tracker.used("main", now=1000.0) == 0
     tracker.record("main", now=1000.0)
     assert json.loads(path.read_text(encoding="utf-8")) == {"main": [1000.0]}
+
+
+
+async def test_refresh_drops_the_cached_copy_once_a_minute(monkeypatch):
+    handler, calls = counting()
+    kb = make_client(monkeypatch, handler, kb4_cache_seconds=600)
+    clock = [1000.0]
+    monkeypatch.setattr(client_module.time, "monotonic", lambda: clock[0])
+    await kb.get("main", "/v1/account")
+    assert kb.clear_cache("main") == {"console": "main", "refreshed": True, "cached_answers_dropped": 1}
+    await kb.get("main", "/v1/account")
+    assert len(calls) == 2
+    # a second "refresh" within the minute keeps the copy that is seconds old
+    clock[0] += 20
+    assert kb.clear_cache("MAIN") == {"console": "main", "refreshed": False, "data_age_at_most_seconds": 20}
+    await kb.get("main", "/v1/account")
+    assert len(calls) == 2
+    clock[0] += 41
+    assert kb.clear_cache("main")["refreshed"] is True
+    await kb.get("main", "/v1/account")
+    assert len(calls) == 3
+
+
+async def test_refresh_leaves_other_consoles_cached(monkeypatch):
+    handler, calls = counting()
+    kb = make_client(monkeypatch, handler)
+    kb._cache[("other", "/v1/account", ())] = (time.monotonic() + 600, {"name": "other"})
+    await kb.get("main", "/v1/account")
+    kb.clear_cache("main")
+    assert ("other", "/v1/account", ()) in kb._cache
+
+
+
+def test_raw_account_and_user_carry_the_knowbe4_level():
+    # the model called 38.01 "Medium" from a bare score
+    from kb4_mcp.server_impl import _with_level
+
+    assert _with_level({"name": "a", "current_risk_score": 38.01})["current_risk_level"] == "Low"
+    assert _with_level({"current_risk_score": 54.2})["current_risk_level"] == "Critical"
+    assert _with_level({"name": "no score"}) == {"name": "no score"}
