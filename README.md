@@ -167,6 +167,7 @@ The `LLM_*` defaults already point at Ollama on this machine:
 | `LLM_HISTORY_MESSAGES` | `6` | Earlier messages sent with each question, so follow-ups such as "2" or "show 20 more" work. Kept only in the open page |
 | `KB4_RATE_LIMIT_RPS` | `0.8` | KnowBe4 requests per second (about 48 a minute) |
 | `KB4_CACHE_SECONDS` | `600` | KnowBe4 answers are reused for this long, so repeat and follow-up questions cost no requests. `0` always fetches fresh. A question that asks for fresh data ("ambil data terbaru", "refresh", "jangan pakai cache", "fetch fresh data") skips the copy for that answer, at most once a minute per console |
+| `KB4_USAGE_FILE` | `.kb4_usage.json` | Where the rolling 24-hour request count is kept (git-ignored). Change it only to keep the count somewhere else, for example on a shared drive when two copies run against the same console |
 | `KB4_DAILY_LIMIT` | empty | Requests per console per rolling 24 hours. Empty uses KnowBe4's limit: 2,000 plus the account's licensed seats |
 | `WEB_ALLOWED_HOSTS` | empty | Extra host names the web chat answers to, comma-separated (for a LAN or Docker demo). `127.0.0.1` and `localhost` always work; any other name gets "Invalid host header" |
 | `KB4_CONSOLES_FILE` | empty | Path to a consoles file other than `config/consoles.yaml` |
@@ -358,17 +359,17 @@ Use the MCP Inspector for local verification if desired. The Python MCP SDK's cu
 
 The server provides dedicated tools for the documented Reporting API resource families:
 
-- Account + account risk score history
-- Users + specific user + user risk score history
-- Groups + specific group + group members + group risk score history
-- Phishing campaigns + campaign detail
-- Phishing Security Tests + PST detail
-- PST recipients + individual recipient
-- Training campaigns + campaign detail
-- Training enrollments + enrollment detail
-- Training store purchases + purchase detail
-- Training policies + policy detail
-- Generic read-only GET for documented `/v1/*` endpoints not yet wrapped
+- Account + account risk score history: `get_account`, `get_account_risk_score_history`, `knowbe4_health_check`
+- Users + specific user + user risk score history: `list_users`, `get_user`, `get_user_risk_score_history`
+- Groups + specific group + group members + group risk score history: `list_groups`, `get_group`, `list_group_members`, `get_group_risk_score_history`
+- Phishing campaigns + campaign detail: `list_phishing_campaigns`, `get_phishing_campaign`
+- Phishing Security Tests + PST detail: `list_phishing_security_tests`, `get_phishing_security_test`
+- PST recipients + individual recipient: `list_phishing_recipients`, `get_phishing_recipient`
+- Training campaigns + campaign detail: `list_training_campaigns`, `get_training_campaign`
+- Training enrollments + enrollment detail: `list_training_enrollments`, `get_training_enrollment`
+- Training store purchases + purchase detail: `list_training_store_purchases`, `get_training_store_purchase`
+- Training policies + policy detail: `list_training_policies`, `get_training_policy`
+- Generic read-only GET for documented `/v1/*` endpoints not yet wrapped: `knowbe4_raw_get` (hidden from the chat model unless `LLM_EXPOSE_RAW_GET=true`)
 
 KnowBe4 may add new endpoints. The raw GET tool is the compatibility escape hatch for any documented read-only `/v1/*` endpoint that has not yet received a dedicated wrapper.
 
@@ -383,6 +384,13 @@ These fetch the full collection, do the sorting and arithmetic in Python and ret
 | `find_user(console, query, limit)` | Users matching a name, email, job title or department, with their ids |
 | `phishing_campaign_summary(console, limit, sort, start_date, end_date)` | Phishing security tests, newest first (`sort=latest`) or worst first (`sort=highest_ppp`), with `phish_prone_percent` |
 | `training_completion_summary(console, campaign_id, start_date, end_date, limit)` | Training campaigns, newest first, with completion % and the average |
+| `training_by_group(console, campaign, campaign_date, groups, by, include_archived)` | One training campaign per group: people (or enrolments) completed, in progress, not started and Past Due, with totals that count each person once. The campaign by name, id or start date (when several start the same day, the one aimed at the named groups; otherwise the chat asks which); groups by name, or the ones named in the question, or the campaign's own. Archived people are left out unless asked and are counted in a note. The table is built in code; CSV dataset `training_by_group` |
+| `phishing_by_group(console, pst_id, test, start_date, end_date, groups, include_archived)` | One phishing test (or every test in a period) per group: delivered, failed, clicked, entered data, opened attachments, reported, failure and report %. Nothing named = the latest test. Groups from the question or every group that got the test; KnowBe4's own system groups (Real-Time Coaching "RTC_" groups) get no row but are counted |
+| `campaign_people(console, campaign, campaign_date, groups, status, include_archived, limit)` | The people behind a campaign's numbers: who is Past Due, not started, in progress or completed (name, email, each module's status), optionally in some groups |
+| `group_members(console, group, sort, limit)` | Who is in a group, with each person's risk score, level, phish-prone % and Past Due training |
+| `person_training(console, user_id, name, limit)` | One person's training enrolments: campaign, module, status, enrolled and completed dates, minutes spent |
+| `coverage_gaps(console, start_date, end_date, limit)` | Active people with no phishing test, no training enrolment, or neither, in a period (like KnowBe4's unphished and untrained users report) |
+| `compare_periods(console, metric, start_date, end_date, compare_start, compare_end)` | The same phishing or training numbers for two periods side by side, with the change; without a second period, the one just before |
 | `account_risk_overview(console, start_date, end_date)` | Current score and KnowBe4 level, change vs 30 and 90 days ago, 3-month figures, and the data behind "why" (phishing failures, users per level, comparison with KnowBe4's benchmark) |
 | `user_risk_summary(console, user_id, start_date, end_date)` | The same for one person, plus their training status (for example how many enrolments are Past Due) |
 | `list_users_page(console, status, sort, offset, limit)` | One page of at most 20 users with the total and `next_offset`, so "show more" works |

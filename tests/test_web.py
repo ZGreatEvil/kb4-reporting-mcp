@@ -237,3 +237,45 @@ def test_health_lists_product_keys_by_name_only(client, monkeypatch):
     body = client.get("/health").json()
     assert all(products == ["ksat"] for products in body["product_apis"].values())
     assert "secret-value" not in json.dumps(body)
+
+
+def test_llm_down_inside_the_mcp_session_is_not_called_mcp_down(client, monkeypatch):
+    # audit 2026-11-12: with ollama stopped and mcp fine, the answer said the MCP server could not be reached
+    nested = ExceptionGroup("tg", [ExceptionGroup("session", [LLMError("llm_unreachable", url="http://127.0.0.1:11434/v1")])])
+
+    async def ask(*a, **k):
+        raise nested
+
+    async def stream(message, language, history):
+        raise nested
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(main.AGENT, "ask_with_note", ask)
+    monkeypatch.setattr(main.AGENT, "ask_stream", stream)
+    for language in ("id", "en"):
+        body = client.post("/api/chat", json={"message": "hi", "language": language}).json()
+        assert body["error_type"] == "LLMError" and body["answer"] == LLMError("llm_unreachable", url="http://127.0.0.1:11434/v1").text(language)
+        events = [json.loads(line) for line in client.post("/api/chat/stream", json={"message": "hi", "language": language}).text.splitlines()]
+        assert events[-1] == {"type": "error", "message": LLMError("llm_unreachable", url="http://127.0.0.1:11434/v1").text(language)}
+    # a real transport failure still says MCP
+    async def mcp_down(*a, **k):
+        raise ExceptionGroup("tg", [ConnectionError("refused")])
+    monkeypatch.setattr(main.AGENT, "ask_with_note", mcp_down)
+    assert client.post("/api/chat", json={"message": "hi", "language": "en"}).json()["answer"] == main.msg("mcp_transport", "en")
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("report.csv", "report.csv"), ("../../evil.bat", "evil.bat.csv"), (r"..\..\x.csv", "x.csv"),
+    ("Risiko pengguna.csv", "Risiko_pengguna.csv"), ("...", "export.csv"), ("a/", "export.csv"),
+])
+def test_export_download_names_are_plain(client, monkeypatch, tmp_path, name, expected):
+    monkeypatch.setattr(main, "EXPORT_DIR", tmp_path)
+    (tmp_path / ("e" * 32 + ".csv")).write_text("a,b\n1,2\n", encoding="utf-8")
+    r = client.get("/exports/" + "e" * 32 + ".csv", params={"name": name})
+    assert r.status_code == 200 and f'filename="{expected}"' in r.headers["content-disposition"]
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_api_docs_are_not_served(client, path):
+    # audit 2026-11-12: /docs pulled swagger from a CDN the CSP blocks, and described the whole api on the LAN
+    assert client.get(path).status_code == 404

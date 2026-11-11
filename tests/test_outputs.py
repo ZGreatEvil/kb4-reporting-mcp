@@ -230,7 +230,7 @@ def test_export_download_endpoint(monkeypatch, tmp_path):
     assert client.get("/exports/..%2F..%2F.env.csv").status_code == 404
     assert client.get("/exports/" + "c" * 32 + ".csv").status_code == 404
     weird = client.get(f"/exports/{file_id}.csv?name=../../evil name")
-    assert 'filename=".._.._evil_name.csv"' in weird.headers["content-disposition"]
+    assert 'filename="evil_name.csv"' in weird.headers["content-disposition"]
 
 
 async def test_phishing_summary_gives_weighted_average():

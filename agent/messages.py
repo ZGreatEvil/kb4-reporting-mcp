@@ -127,6 +127,112 @@ MESSAGES: dict[str, dict[str, str]] = {
         "id": "Dari {period}: {total} konten baru ({published} diterbitkan KnowBe4, {added} ditambahkan ke akun); {never} belum pernah ditugaskan ke siapa pun.",
         "en": "From {period}: {total} content items are new ({published} published by KnowBe4, {added} added to the account); {never} have never been assigned to anyone.",
     },
+    "read_only": {
+        "id": "**Saya hanya membaca data KnowBe4, jadi saya tidak bisa mengubah, menambah atau menghapus apa pun.** Lakukan perubahan itu di console KnowBe4. Saya bisa membantu melihat datanya, misalnya siapa saja yang terkait.",
+        "en": "**I only read KnowBe4 data, so I can't change, add or delete anything.** Make that change in the KnowBe4 console. I can help you look at the data, for example who it would affect.",
+    },
+    "unknown_console": {
+        "id": "**Tidak ada console bernama \"{name}\".** Console yang tersedia: {consoles}.",
+        "en": "**There is no console called \"{name}\".** Available consoles: {consoles}.",
+    },
+    "call_find_user": {
+        "id": "Pertanyaan ini tentang orang bernama {name}. Panggil find_user dengan query \"{name}\" sekarang, lalu jawab hanya dari hasilnya (tidak ditemukan, atau tanyakan yang mana).",
+        "en": "This question is about a person called {name}. Call find_user with query \"{name}\" now, then answer only from its result (not found, or ask which one).",
+    },
+    "chart_data": {"id": "Data grafik", "en": "Chart data"},
+    "chart_more": {"id": "…dan {n} lagi (file CSV berisi semuanya).", "en": "…and {n} more (a CSV export has them all)."},
+    "chart_cols_users_by_level": {"id": "| Level | Pengguna |", "en": "| Level | Users |"},
+    "chart_cols_top_users": {"id": "| No | Nama | Risk score | Level |", "en": "| No | Name | Risk score | Level |"},
+    "chart_cols_phishing_tests": {"id": "| Tes | Tanggal | Phish-prone % |", "en": "| Test | Date | Phish-prone % |"},
+    "chart_cols_groups": {"id": "| Grup | Risk score | Level | Pengguna aktif |", "en": "| Group | Risk score | Level | Active users |"},
+    "chart_cols_training_completion": {"id": "| Campaign | Mulai | Penyelesaian |", "en": "| Campaign | Start | Completion |"},
+    "chart_cols_modules": {"id": "| Modul | Terdaftar | Lulus | Sedang berjalan | Belum mulai | Past Due | % selesai |",
+                           "en": "| Module | Enrolled | Passed | In progress | Not started | Past Due | % complete |"},
+    "chart_cols_reported_emails": {"id": "| Bulan | Email dilaporkan |", "en": "| Month | Emails reported |"},
+    "chart_cols_trend": {"id": "| Titik | Tanggal | Risk score |", "en": "| Point | Date | Risk score |"},
+    "chart_point_first": {"id": "Awal", "en": "First"},
+    "chart_point_lowest": {"id": "Terendah", "en": "Lowest"},
+    "chart_point_highest": {"id": "Tertinggi", "en": "Highest"},
+    "chart_point_last": {"id": "Terakhir", "en": "Latest"},
+    "chart_categories": {"id": "Per kategori: {items}. Masih terbuka: {open}.", "en": "By category: {items}. Still open: {open}."},
+    "table_phishing_by_group": {
+        "id": "| Grup | Terkirim | Gagal | Klik | Isi data | Buka lampiran | Melapor | % gagal | % melapor |",
+        "en": "| Group | Delivered | Failed | Clicked | Entered data | Opened attachment | Reported | % failed | % reported |",
+    },
+    "table_campaign_people": {"id": "| No | Nama | Email | Status | Modul |", "en": "| No | Name | Email | Status | Modules |"},
+    "table_group_members": {"id": "| No | Nama | Email | Risk score | Level | Phish-prone % | Training Past Due |",
+                            "en": "| No | Name | Email | Risk score | Level | Phish-prone % | Past Due training |"},
+    "table_person_training": {"id": "| Campaign | Modul | Status | Didaftarkan | Selesai | Menit |",
+                              "en": "| Campaign | Module | Status | Enrolled | Completed | Minutes |"},
+    "table_coverage_gaps": {"id": "| No | Nama | Email | Bergabung |", "en": "| No | Name | Email | Joined |"},
+    "coverage_neither_heading": {"id": "Belum pernah dites phishing maupun ikut training:", "en": "Never phished and never trained:"},
+    "table_compare": {"id": "| | {a} | {b} |", "en": "| | {a} | {b} |"},
+    "compare_rows_phishing": {"id": "Tes|Email terkirim|Phish-prone %|Melapor|% melapor", "en": "Tests|Emails delivered|Phish-prone %|Reported|% reported"},
+    "compare_rows_training": {"id": "Enrolmen|Selesai|Past Due|% selesai|% Past Due", "en": "Enrolments|Completed|Past Due|% completed|% Past Due"},
+    "breakdown_more": {"id": "…dan {n} lagi.", "en": "…and {n} more."},
+    "phishing_group_line": {
+        "id": "Tes phishing {what}: {delivered} email terkirim ke orang di {groups} grup; {failed} {unit} gagal ({fpct}) dan {reported} {unit} melapor ({rpct}).",
+        "en": "Phishing test {what}: {delivered} emails delivered to people in {groups} groups; {failed} {unit} failed ({fpct}) and {reported} {unit} reported it ({rpct}).",
+    },
+    "compare_line": {
+        "id": "{label}: {a} pada {pa} dibanding {b} pada {pb} ({change}).",
+        "en": "{label}: {a} in {pa} against {b} in {pb} ({change}).",
+    },
+    "compare_label_phishing": {"id": "Phish-prone %", "en": "Phish-prone %"},
+    "compare_label_training": {"id": "Penyelesaian training", "en": "Training completion"},
+    "compare_better": {"id": "{points} poin, lebih baik", "en": "{points} points, better"},
+    "compare_worse": {"id": "{points} poin, lebih buruk", "en": "{points} points, worse"},
+    "compare_same": {"id": "tidak berubah", "en": "no change"},
+    "compare_missing": {"id": "salah satu periode tidak punya data", "en": "one period has no data"},
+    "phishing_unit_people": {"id": "orang", "en": "people"},
+    "phishing_unit_emails": {"id": "email", "en": "emails"},
+    "phishing_group_standouts": {
+        "id": "% gagal tertinggi: {top} ({top_pct}%); % melapor tertinggi: {rep} ({rep_pct}%). Email terbanyak: {big} ({big_n}).",
+        "en": "Highest % failed: {top} ({top_pct}%); highest % reported: {rep} ({rep_pct}%). Most emails: {big} ({big_n}).",
+    },
+    "group_training_line": {
+        "id": "{name} (mulai {date}, {status}): {total} {unit} di {groups} grup; {completed} selesai ({percent}%), {in_progress} sedang berjalan, {not_started} belum mulai, {past_due} Past Due ({percent_past_due}%).",
+        "en": "{name} (started {date}, {status}): {total} {unit} in {groups} groups; {completed} completed ({percent}%), {in_progress} in progress, {not_started} not started, {past_due} Past Due ({percent_past_due}%).",
+    },
+    "group_training_header": {
+        "id": "| Grup | {unit} | Selesai | Sedang berjalan | Belum mulai | Past Due | % selesai |",
+        "en": "| Group | {unit} | Completed | In progress | Not started | Past Due | % complete |",
+    },
+    "group_training_unit_user": {"id": "orang", "en": "people"},
+    "group_training_unit_enrolment": {"id": "enrolmen", "en": "enrolments"},
+    "group_training_total": {"id": "Total (tiap orang sekali)", "en": "Total (each person once)"},
+    "group_training_standouts": {
+        "id": "Penyelesaian tertinggi: {top} ({top_pct}%); terendah: {low} ({low_pct}%). Past Due terbanyak: {most} ({most_n} orang). Grup terbesar: {big} ({big_n} orang).",
+        "en": "Highest completion: {top} ({top_pct}%); lowest: {low} ({low_pct}%). Most Past Due: {most} ({most_n} people). Largest group: {big} ({big_n} people).",
+    },
+    "group_training_overlap": {
+        "id": "Campaign-campaign ini berjumlah {per_campaign} orang karena {count} orang terdaftar di lebih dari satu campaign; tabel menghitung tiap orang sekali ({total}).",
+        "en": "The campaigns add up to {per_campaign} people because {count} person(s) were enrolled in more than one of them; the table counts each person once ({total}).",
+    },
+    "group_training_rule": {
+        "id": "Tiap orang dihitung sekali per grup menurut modul yang paling belum selesai (satu modul Past Due = Past Due).",
+        "en": "Each person counts once per group, by their least finished module (one Past Due module means Past Due).",
+    },
+    "group_training_archived": {
+        "id": "{count} orang yang sudah diarsipkan di KnowBe4 tidak dihitung; minta \"termasuk yang diarsipkan\" untuk ikut menghitungnya.",
+        "en": "{count} people archived in KnowBe4 are not counted; ask to \"include archived\" to count them too.",
+    },
+    "group_training_not_targeted": {
+        "id": "Grup ini tidak menjadi target campaign tersebut: {names}.",
+        "en": "These groups were not targeted by these campaigns: {names}.",
+    },
+    "group_training_unknown": {
+        "id": "Grup ini tidak ditemukan di KnowBe4: {names}.",
+        "en": "These groups were not found in KnowBe4: {names}.",
+    },
+    "campaign_choices": {
+        "id": "Ada beberapa training campaign yang cocok. Yang mana?",
+        "en": "Several training campaigns match. Which one?",
+    },
+    "campaign_choices_hint": {
+        "id": "Balas dengan nomornya atau sebut nama campaign-nya.",
+        "en": "Reply with its number or name the campaign.",
+    },
     "modstore_media_scope": {
         "id": "Daftar ModStore ini berisi video dan konten coaching. Modul pelatihan (course) ModStore tidak tersedia lewat API KnowBe4; lihat di Training → ModStore di console.",
         "en": "This ModStore list covers videos and coaching content. ModStore training courses are not available through KnowBe4's API; browse them in Training → ModStore in the console.",
@@ -274,6 +380,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "- **Pengguna dan grup:** pengguna dan grup paling berisiko, tren risiko sebuah grup, mencari orang berdasarkan nama atau email, riwayat risk score seseorang, siapa yang belum pernah login ke KnowBe4, dan karyawan baru.\n"
             "- **Phishing:** hasil tes phishing, siapa yang klik dan siapa yang melaporkan, seberapa cepat orang tertipu, siapa yang gagal lebih dari sekali, callback phishing (lewat telepon), dan phish-prone % dibanding benchmark KnowBe4.\n"
             "- **Training:** penyelesaian training campaign, progres per modul (lulus, lewat tenggat, belum mulai, waktu pengerjaan), konten training yang dimiliki, dan training yang lewat tenggat.\n"
+            "- **Per grup dan per orang:** hasil phishing dan training per grup, siapa saja yang lewat tenggat di sebuah campaign, anggota sebuah grup, riwayat training seseorang, siapa yang belum pernah dites atau ditraining, dan perbandingan dua periode.\n"
             "{products}"
             "- **Periode:** sebutkan periode seperti \"dari 2026\" atau \"3 bulan terakhir\". Tanpa periode, saya memakai 12 bulan terakhir.\n"
             "- **Grafik dan CSV:** grafik muncul sendiri bila membantu. File CSV saya buat bila Anda memintanya.\n"
@@ -295,6 +402,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "- **Users and groups:** the riskiest users and groups, a group's risk trend, finding a person by name or email, a person's risk score history, who has never signed in to KnowBe4, and new joiners.\n"
             "- **Phishing:** phishing test results, who clicked and who reported, how fast people fell for it, who failed more than once, callback (phone) phishing, and the phish-prone % against KnowBe4's benchmark.\n"
             "- **Training:** training campaign completion, progress per module (passed, overdue, not started, time spent), the training content you have, and overdue training.\n"
+            "- **Per group and per person:** phishing and training results per group, who is overdue in a campaign, a group's members, a person's training history, who has never been phished or trained, and two periods side by side.\n"
             "{products}"
             "- **Periods:** name a period such as \"since 2026\" or \"the last 3 months\". Without one, I use the past 12 months.\n"
             "- **Charts and CSV:** charts appear on their own when they help. I make a CSV file when you ask for one.\n"

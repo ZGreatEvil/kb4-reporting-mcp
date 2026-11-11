@@ -5,7 +5,7 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from config.settings import PRODUCTS, load_config
-from kb4_mcp import outputs, products, summaries
+from kb4_mcp import breakdowns, outputs, products, summaries
 from kb4_mcp.knowledge import NistSearch
 from knowbe4.client import KnowBe4APIError, KnowBe4Client, readable_error
 
@@ -75,8 +75,8 @@ async def account_risk_overview(console:str,start_date:Optional[str]=None,end_da
 async def user_risk_summary(console:str,user_id:int,start_date:Optional[str]=None,end_date:Optional[str]=None)->dict: return await summaries.user_risk_summary(KB4,console,user_id,start_date,end_date)
 @mcp.tool(description="PREFER for charts/graphs: draws one and attaches it. chart = risk_trend (line; user_id for one person), users_by_level (pie), top_users (bar), phishing_tests (bar), training_completion (bar), groups (bar, riskiest groups), modules (bar, completion per training module), group_trend (line; group_id from group_risk_trend), reported_emails (bar, emails reported to PhishER per month). Optional period: start_date / end_date (YYYY-MM-DD).")
 async def make_chart(console:str,chart:str,user_id:Optional[int]=None,limit:int=10,language:str="id",start_date:Optional[str]=None,end_date:Optional[str]=None,group_id:Optional[int]=None)->dict: return await outputs.make_chart(KB4,console,chart,language,user_id,limit,start_date,end_date,group_id)
-@mcp.tool(description="Export data as a CSV file download (export, CSV, Excel, unduh). dataset = users (status: active by default, archived, or all), phishing_tests, training_campaigns, risk_history (the organisation's history: leave user_id out; one person: their numeric user_id), modules (training progress per module), reported_emails (emails reported to PhishER; needs the PhishER key). Optional period: start_date / end_date (YYYY-MM-DD).")
-async def export_csv(console:str,dataset:str,user_id:Optional[int]=None,status:str="active",start_date:Optional[str]=None,end_date:Optional[str]=None)->dict: return await outputs.export_csv(KB4,console,dataset,user_id,status,start_date,end_date)
+@mcp.tool(description="Export data as a CSV file download (export, CSV, Excel, unduh). dataset = users (status: active by default, archived, or all), phishing_tests, training_campaigns, risk_history (the organisation's history: leave user_id out; one person: their numeric user_id), modules (training progress per module), reported_emails (emails reported to PhishER; needs the PhishER key), training_by_group (one training campaign per group: give campaign or campaign_date, and groups). Optional period: start_date / end_date (YYYY-MM-DD).")
+async def export_csv(console:str,dataset:str,user_id:Optional[int]=None,status:str="active",start_date:Optional[str]=None,end_date:Optional[str]=None,campaign:Optional[str]=None,campaign_date:Optional[str]=None,groups:Optional[str]=None,text:Optional[str]=None)->dict: return await outputs.export_csv(KB4,console,dataset,user_id,status,start_date,end_date,campaign,campaign_date,groups,text)
 @mcp.tool(description="Search official NIST guidance (SP 800-50r1 awareness and training programmes, CSF 2.0, NIST Phish Scale). query in ENGLISH keywords. For best practice, framework or 'what does NIST say' questions.")
 def search_nist(query:str,limit:int=4)->dict: return NIST.search(query,limit)
 @mcp.tool(description="PREFER for listing users: one page (default 20) sorted by risk or name, with the total and next_offset for 'show more'.")
@@ -131,6 +131,18 @@ async def templates(console:str,kind:str="phishing",search:Optional[str]=None,so
 async def account_settings(console:str)->dict: return await products.account_settings(KB4,console)
 @mcp.tool(description="PREFER for how campaigns are set up: schedule, recurring or one-off, next run, audience, business hours, tracking, AIDA templates (kind=phishing) or status, auto-enrol, duration, knowledge refreshers (kind=training). search = words from a campaign name.")
 async def campaign_settings(console:str,kind:str="phishing",search:Optional[str]=None,limit:int=10)->dict: return await products.campaign_settings(KB4,console,kind,search,limit)
+@mcp.tool(description="PREFER for phishing results per group: delivered, failed, clicked, entered data, reported and the rates for each group. One test by pst_id or name words (test), or every test in a period (start_date / end_date, YYYY-MM-DD); nothing named = the latest test. groups = group names (comma-separated) or empty for the groups in the question or every group that got the test.")
+async def phishing_by_group(console:str,pst_id:Optional[int]=None,test:Optional[str]=None,start_date:Optional[str]=None,end_date:Optional[str]=None,groups:Optional[str]=None,text:Optional[str]=None,include_archived:bool=False)->dict: return await breakdowns.phishing_by_group(KB4,console,pst_id,test,start_date,end_date,groups,text,include_archived)
+@mcp.tool(description="PREFER for WHO is behind in one training campaign: the people (name, email, modules) who are Past Due, not started, in progress or completed. campaign = name words or id, campaign_date = start date (YYYY-MM-DD); status = past_due (default), not_started, in_progress, completed or all; groups = group names to narrow it down.")
+async def campaign_people(console:str,campaign:Optional[str]=None,campaign_date:Optional[str]=None,groups:Optional[str]=None,status:str="past_due",text:Optional[str]=None,include_archived:bool=False,limit:int=50)->dict: return await breakdowns.campaign_people(KB4,console,campaign,campaign_date,groups,status,text,include_archived,limit)
+@mcp.tool(description="PREFER for who is in a group (members, anggota): each person's risk score, level, phish-prone % and Past Due training. group = the group's name. sort = risk (default) or name.")
+async def group_members(console:str,group:Optional[str]=None,sort:str="risk",limit:int=50,text:Optional[str]=None)->dict: return await breakdowns.group_members(KB4,console,group,sort,limit,text)
+@mcp.tool(description="PREFER for one person's training: every enrolment with campaign, module, status, dates and minutes spent. user_id (from find_user) or name.")
+async def person_training(console:str,user_id:Optional[int]=None,name:Optional[str]=None,limit:int=30)->dict: return await breakdowns.person_training(KB4,console,user_id,name,limit)
+@mcp.tool(description="PREFER for who has never been phished or trained: active people with no phishing test, no training enrolment, or neither, in a period (start_date / end_date, YYYY-MM-DD).")
+async def coverage_gaps(console:str,start_date:Optional[str]=None,end_date:Optional[str]=None,limit:int=50)->dict: return await breakdowns.coverage_gaps(KB4,console,start_date,end_date,limit)
+@mcp.tool(description="PREFER for comparing two periods (this quarter vs last, 2026 vs 2025): metric = phishing (tests, delivered, phish-prone %, report %) or training (enrolments, completed, Past Due, completion %). start_date / end_date = the main period (YYYY-MM-DD); compare_start / compare_end = the other one, or leave them out for the period just before.")
+async def compare_periods(console:str,metric:str="phishing",start_date:Optional[str]=None,end_date:Optional[str]=None,compare_start:Optional[str]=None,compare_end:Optional[str]=None)->dict: return await breakdowns.compare_periods(KB4,console,metric,start_date,end_date,compare_start,compare_end)
 @mcp.tool(description="PREFER for which KnowBe4 products are set up / in use (PhishER, PasswordIQ, Real-Time Coaching, KSAT, User Events).")
 async def product_status(console:str)->dict: return await products.product_status(KB4,console)
 @mcp.tool(description="Account name, subscription and current risk score for one console.")
@@ -158,20 +170,26 @@ async def get_group_risk_score_history(console:str,group_id:int,full:bool=False)
 async def get_group(console:str,group_id:int)->dict: return await KB4.get_group(console,group_id)
 @mcp.tool(description="Members of one group.")
 async def list_group_members(console:str,group_id:int,max_records:Optional[int]=None)->list: return await KB4.list_group_members(console,group_id,max_records)
-@mcp.tool(description="Raw phishing campaigns (containers of security tests).")
-async def list_phishing_campaigns(console:str,campaign_type:Optional[str]=None,max_records:Optional[int]=None)->list: return await KB4.list_phishing_campaigns(console,campaign_type,max_records)
+def _newest_first(items,*fields,max_records=None):
+    # KnowBe4 lists oldest first: "the newest" from the first 10 was a 2025 campaign when 2026 ones existed
+    items=sorted(items or [],key=lambda x:next((str(x.get(f)) for f in fields if x.get(f)),""),reverse=True)
+    return items[:max_records] if max_records else items
+@mcp.tool(description="Raw phishing campaigns (containers of security tests), newest first.")
+async def list_phishing_campaigns(console:str,campaign_type:Optional[str]=None,max_records:Optional[int]=None)->list: return _newest_first(await KB4.list_phishing_campaigns(console,campaign_type),"last_run","create_date",max_records=max_records)
 @mcp.tool(description="One phishing campaign by id.")
 async def get_phishing_campaign(console:str,campaign_id:int,campaign_type:Optional[str]=None): return await KB4.get_phishing_campaign(console,campaign_id,campaign_type)
-@mcp.tool(description="Raw phishing security tests; use phishing_campaign_summary instead where possible.")
-async def list_phishing_security_tests(console:str,campaign_type:Optional[str]=None,max_records:Optional[int]=None)->list: return await KB4.list_phishing_security_tests(console,campaign_type,max_records)
+@mcp.tool(description="Raw phishing security tests, newest first; use phishing_campaign_summary instead where possible.")
+async def list_phishing_security_tests(console:str,campaign_type:Optional[str]=None,max_records:Optional[int]=None)->list: return _newest_first(await KB4.list_phishing_security_tests(console,campaign_type),"started_at",max_records=max_records)
 @mcp.tool(description="One phishing security test by pst_id.")
 async def get_phishing_security_test(console:str,pst_id:int,campaign_type:Optional[str]=None): return await KB4.get_phishing_security_test(console,pst_id,campaign_type)
 @mcp.tool(description="Recipients of one phishing security test; large.")
 async def list_phishing_recipients(console:str,pst_id:int,campaign_type:Optional[str]=None,max_records:Optional[int]=None)->list: return await KB4.list_pst_recipients(console,pst_id,campaign_type,max_records)
 @mcp.tool(description="One recipient of a phishing security test.")
 async def get_phishing_recipient(console:str,pst_id:int,recipient_id:int,campaign_type:Optional[str]=None): return await KB4.get_pst_recipient(console,pst_id,recipient_id,campaign_type)
-@mcp.tool(description="Raw training campaigns; use training_completion_summary instead where possible.")
-async def list_training_campaigns(console:str,exclude_percentages:bool=False,max_records:Optional[int]=None)->list: return await KB4.list_training_campaigns(console,exclude_percentages,max_records)
+@mcp.tool(description="Raw training campaigns, newest first; use training_completion_summary instead where possible.")
+async def list_training_campaigns(console:str,exclude_percentages:bool=False,max_records:Optional[int]=None)->list: return _newest_first(await KB4.list_training_campaigns(console,exclude_percentages),"start_date",max_records=max_records)
+@mcp.tool(description="PREFER for one training campaign per group: how many people completed, are in progress, not started or Past Due in each group. campaign = words from its name or its id; campaign_date = its start date (YYYY-MM-DD); groups = group names (comma-separated), or leave empty for the groups named in the question or the campaign's own groups. by = user (default) or enrolment. include_archived = true also counts archived people.")
+async def training_by_group(console:str,campaign:Optional[str]=None,campaign_date:Optional[str]=None,groups:Optional[str]=None,by:str="user",text:Optional[str]=None,include_archived:bool=False)->dict: return await summaries.training_by_group(KB4,console,campaign,campaign_date,groups,by,text,include_archived)
 @mcp.tool(description="One training campaign by id.")
 async def get_training_campaign(console:str,campaign_id:int): return await KB4.get_training_campaign(console,campaign_id)
 @mcp.tool(description="Training enrollments, filterable by campaign_id or user_id; large.")

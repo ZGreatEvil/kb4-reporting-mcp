@@ -106,6 +106,11 @@ def test_bad_env_values_name_the_setting(monkeypatch, name, value, expected):
     ("consoles:\n  a:\n    display_name: A\n    base_url: x\n    api_key_env: K\n", "consoles: a.base_url"),
     ("consoles:\n  a:\n    region: us\n", "consoles: a.display_name"),
     ("consoles:\n  - a\n", "config/consoles.yaml, consoles: Input should be a valid dictionary"),
+    # found in the 2026-11-12 audit: these loaded as zero consoles and the server started
+    ("main:\n  display_name: A\n  api_key_env: K\n", "unknown top-level entries: main"),
+    ("console:\n  a:\n    display_name: A\n    api_key_env: K\n", "unknown top-level entries: console"),
+    ("consoles:\n", "lists no consoles"),
+    ("", "lists no consoles"),
 ])
 def test_bad_consoles_file_is_explained(tmp_path, text, expected):
     from config.settings import SettingsError
@@ -117,7 +122,3 @@ def test_bad_consoles_file_is_explained(tmp_path, text, expected):
     assert expected in str(info.value)
 
 
-def test_empty_consoles_file_loads_with_no_consoles(tmp_path):
-    f = tmp_path / "consoles.yaml"
-    f.write_text("", encoding="utf-8")
-    assert load_config(f).consoles == {}

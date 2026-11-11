@@ -148,6 +148,11 @@
     const template = document.createElement('template');
     template.innerHTML = DOMPurify.sanitize(marked.parse(text));
     const fragment = template.content;
+    // the only real images are charts the server made; a raw <img> the model wrote showed up full width on
+    // one phone and as a stray dot elsewhere
+    fragment.querySelectorAll('img').forEach((img) => {
+      if (!/^\/static\/charts\/[0-9a-f]{32}\.png$/.test(img.getAttribute('src') || '')) img.remove();
+    });
     // screen readers announce an image without alt by its file name
     fragment.querySelectorAll('img:not([alt])').forEach((img) => { img.alt = ''; });
     fragment.querySelectorAll('table').forEach((table) => {

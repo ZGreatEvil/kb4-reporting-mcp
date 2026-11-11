@@ -349,17 +349,25 @@ async def find_user(kb: Any, console: str, query: str, limit: int = 10) -> dict[
         return all(word in haystack for word in needle.split())
 
     found = [u for u in users if matches(u)]
+    # "Dewi Lestari" also matched an archived "Lestari Dewi Lestari": one active person with exactly that name is the one meant
+    exact = [u for u in found if _name(u).lower() == " ".join(needle.split()) and u.get("status") == "active"]
+    chosen = exact[0] if len(found) > 1 and len(exact) == 1 else None
+    if chosen:
+        found = [chosen] + [u for u in found if u is not chosen]
+    ask = len(found) > 1 and not chosen
     return {
         "console": console,
         "query": query,
         "searched": len(users),
         "match_count": len(found),
         # the agent stops detail lookups in the same answer when this is set
-        "ask_user": len(found) > 1,
+        "ask_user": ask,
+        **({"chosen": chosen.get("id")} if chosen else {}),
         "matches": [_user_row(u) for u in found[: _limit(limit)]],
         "next_step": (
-            "Several people match: list them numbered and ask which one. Do not fetch their details yet."
-            if len(found) > 1 else "Use user_risk_summary with this id for their risk and history."
+            "Several people match: list them numbered and ask which one. Do not fetch their details yet." if ask else
+            "One active person has exactly this name (the first match); use their id. The others only partly match or are archived."
+            if chosen else "Use user_risk_summary with this id for their risk and history."
         ),
     }
 
@@ -479,6 +487,205 @@ async def training_completion_summary(
         "order": "newest start_date first",
         "note": ("A campaign's completion % comes from its enrolments: enrolments_by_status shows how many passed, are Past Due, "
                  "not started or in progress (current users). Explain a completion % only from these counts; do not guess other reasons."),
+    }
+
+
+# a person's status over the campaign's modules: the one that still needs work counts
+STATUS_RANK = {"Past Due": 4, "Not Started": 3, "In Progress": 2, "Passed": 0, "Completed": 0}
+STATUS_COLUMN = {"Passed": "completed", "Completed": "completed", "In Progress": "in_progress", "Not Started": "not_started",
+                 "Past Due": "past_due"}
+
+
+def _group_names(value: Any) -> list[str]:
+    if isinstance(value, str):
+        value = re.split(r"[,;\n]", value)
+    return [str(v).strip() for v in value or [] if str(v).strip()]
+
+
+def _find_group(name: str, groups: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """exact name first (case-insensitive), then a single word-start match"""
+    exact = [g for g in groups if str(g.get("name") or "").casefold() == name.casefold()]
+    if exact:
+        return exact[0]
+    loose = [g for g in groups if _words_match(g.get("name"), name)]
+    return loose[0] if len(loose) == 1 else None
+
+
+def _campaign_targets(c: dict[str, Any]) -> set[Any]:
+    return {g.get("group_id") or g.get("id") for g in c.get("groups") or []}
+
+
+async def _named_groups(kb: Any, console: str, groups: Any, text: str | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    """the groups a question is about: the list the model passed plus the names written in the question.
+    archived groups too: naming one gave "not found" while its people still had results"""
+    all_groups = await kb.list_groups(console, "all")
+    asked = _group_names(groups)
+    if text:
+        # group names written in the question ("Group-A1, Group-B1, ..."): a model copying 21 names can drop some
+        lowered = text.casefold()
+        seen = {a.casefold() for a in asked}
+        found = []
+        for g in all_groups:
+            name = str(g.get("name") or "")
+            m = re.search(rf"(?<![\w-]){re.escape(name.casefold())}(?![\w-])", lowered) if name else None
+            if m and name.casefold() not in seen:
+                found.append((m.start(), name))
+        # in the order the question lists them, not KnowBe4's order
+        asked += [name for _, name in sorted(found)]
+    resolved, unknown = [], []
+    for name in asked:
+        found = _find_group(name, all_groups)
+        if found and found not in resolved:
+            resolved.append(found)
+        elif not found:
+            unknown.append(name)
+    return all_groups, resolved, unknown
+
+
+async def _pick_campaigns(kb: Any, console: str, campaign: str | None, campaign_date: str | None,
+                          resolved: list[dict[str, Any]]) -> dict[str, Any]:
+    """{"picked": [...]} or a result to return as it is (error, or ask which one)"""
+    if campaign_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", campaign_date.strip()):
+        return {"console": console, "error": True, "message": "campaign_date must be a date like 2026-10-07."}
+    picked = await kb.list_training_campaigns(console)
+    if campaign and str(campaign).strip():
+        wanted = str(campaign).strip()
+        picked = [c for c in picked if str(c.get("campaign_id")) == wanted] if wanted.isdigit() else \
+            [c for c in picked if _words_match(c.get("name"), wanted)]
+    if campaign_date:
+        picked = [c for c in picked if _date(c.get("start_date")) == campaign_date.strip()]
+    if not (campaign or campaign_date):
+        # nothing named: the newest campaign
+        picked = sorted(picked, key=lambda c: str(c.get("start_date") or ""), reverse=True)[:1]
+    if not picked:
+        what = " and ".join(p for p in (f"named '{campaign}'" if campaign else "", f"starting {campaign_date}" if campaign_date else "") if p)
+        return {"console": console, "error": True, "message": f"No training campaign {what}."}
+    by_date = bool(campaign_date) and not campaign
+    if len(picked) > 1 and resolved:
+        wanted_ids = {g.get("id") for g in resolved}
+        covering = [c for c in picked if wanted_ids & _campaign_targets(c)]
+        if covering and by_date:
+            # one day's rollout comes in language versions (four campaigns on 2026-10-07): every one aimed at a named group
+            # counts. keeping only the best match left five named groups out
+            picked = covering
+        elif covering:
+            best = max(len(wanted_ids & _campaign_targets(c)) for c in covering)
+            picked = [c for c in covering if len(wanted_ids & _campaign_targets(c)) == best]
+    if len(picked) > 1 and not by_date:
+        return {"console": console, "ask_user": True,
+                "message": "Several training campaigns match; ask which one.",
+                "matches": [{"campaign_id": c.get("campaign_id"), "name": c.get("name"), "start_date": _date(c.get("start_date")),
+                             "status": c.get("status"), "groups": [g.get("name") for g in c.get("groups") or []]} for c in picked[:10]]}
+    return {"picked": picked}
+
+
+async def training_by_group(
+    kb: Any, console: str, campaign: str | None = None, campaign_date: str | None = None, groups: Any = None,
+    by: str = "user", text: str | None = None, include_archived: bool = False,
+) -> dict[str, Any]:
+    """one training campaign per group: how many completed, are in progress, not started or Past Due.
+    the model could not join enrolments, people and groups itself (1,596 enrolments in the first live case)"""
+    if campaign_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", campaign_date.strip()):
+        return {"console": console, "error": True, "message": "campaign_date must be a date like 2026-10-07."}
+    if by not in ("user", "enrolment"):
+        by = "user"
+    all_groups, resolved, unknown = await _named_groups(kb, console, groups, text)
+    chosen = await _pick_campaigns(kb, console, campaign, campaign_date, resolved)
+    if "picked" not in chosen:
+        return chosen
+    picked = chosen["picked"]
+    picked.sort(key=lambda c: (str(c.get("start_date") or ""), c.get("campaign_id") or 0))
+    camp_ids = {c.get("campaign_id") for c in picked}
+    targeted = set().union(*(_campaign_targets(c) for c in picked))
+    if not resolved:
+        by_id = {g.get("id"): g for g in all_groups}
+        seen_ids: set[Any] = set()
+        for c in picked:
+            for g in c.get("groups") or []:
+                gid = g.get("group_id") or g.get("id")
+                if gid not in seen_ids:
+                    seen_ids.add(gid)
+                    resolved.append(by_id.get(gid) or {"id": gid, "name": g.get("name")})
+
+    # every enrolment and every person once, then active / archived in code: two fetches cost ~100 requests on a big account
+    enrolments = [e for e in await kb.list_training_enrollments(console, include_campaign_id=True)
+                  if e.get("campaign_id") in camp_ids]
+    people = {u.get("id"): u for u in await kb.list_users(console)}
+    per_user: dict[Any, list[str]] = {}
+    archived: dict[Any, list[str]] = {}
+    campaigns_of: dict[Any, set[Any]] = {}
+    for e in enrolments:
+        uid = (e.get("user") or {}).get("id")
+        campaigns_of.setdefault(uid, set()).add(e.get("campaign_id"))
+        # archived people left the organisation; they are counted only when asked (Group-A1: 17 active, 33 with archived)
+        bucket = per_user if include_archived or (people.get(uid) or {}).get("status") != "archived" else archived
+        bucket.setdefault(uid, []).append(str(e.get("status") or "unknown"))
+    member_of = {uid: set(u.get("groups") or []) for uid, u in people.items()}
+
+    def tally(user_ids: list[Any]) -> dict[str, int]:
+        counts = Counter()
+        for uid in user_ids:
+            statuses = per_user[uid] if by == "enrolment" else [max(per_user[uid], key=lambda s: STATUS_RANK.get(s, 1))]
+            for s in statuses:
+                counts[STATUS_COLUMN.get(s, "other")] += 1
+        row = {k: counts[k] for k in ("completed", "in_progress", "not_started", "past_due")}
+        if counts["other"]:
+            row["other"] = counts["other"]
+        total = sum(counts.values())
+        # both shares: the model once put the completed share (53.16%) next to the Past Due count
+        return {"total": total, **row, "percent_complete": _r(100 * row["completed"] / total) if total else None,
+                "percent_past_due": _r(100 * row["past_due"] / total) if total else None}
+
+    rows, everyone, left_out, not_targeted = [], set(), set(), []
+    for g in resolved:
+        uids = [uid for uid in per_user if g.get("id") in member_of.get(uid, set())]
+        gone = [uid for uid in archived if g.get("id") in member_of.get(uid, set())]
+        if not uids and not gone and g.get("id") not in targeted:
+            # named, but none of these campaigns was aimed at it: say so instead of a row of zeros
+            not_targeted.append(g.get("name"))
+            continue
+        everyone.update(uids)
+        left_out.update(gone)
+        rows.append({"group": g.get("name"), **tally(uids), **({"archived_not_counted": len(gone)} if gone else {})})
+    totals = tally(sorted(everyone, key=str))
+    # KnowBe4 counts a person in every campaign they are in: 945 for the four campaigns of 2026-10-07, 944 different people
+    in_several = sorted((uid for uid in everyone if len(campaigns_of.get(uid, ())) > 1), key=str)
+    per_campaign = sum(len(campaigns_of.get(uid, ())) for uid in everyone)
+    unit = "people" if by == "user" else "enrolments"
+    starts = sorted({_date(c.get("start_date")) for c in picked})
+    started = starts[0] if len(starts) == 1 else f"{starts[0]} – {starts[-1]}"
+    names = list(dict.fromkeys(str(c.get("name") or "").strip() for c in picked))
+    # language versions share the main name: "Awareness Training" four times read badly
+    shortest = min(names, key=len)
+    name = names[0] if len(picked) == 1 else (f"{shortest} ({len(picked)} campaigns)" if all(n.startswith(shortest) for n in names)
+                                              else " + ".join(names))
+    camp = {"campaign_id": picked[0].get("campaign_id") if len(picked) == 1 else None, "name": name,
+            "status": " / ".join(sorted({str(c.get("status")) for c in picked}))}
+    return {
+        "console": console,
+        "campaign": {**camp, "start_date": started, "campaign_ids": sorted(camp_ids),
+                     "modules": sorted({m.get("name") for c in picked for m in c.get("content") or [] if m.get("name")})},
+        "counted_by": by,
+        "headline": (f"{camp.get('name').strip()} (started {started}, {camp.get('status')}): {totals['total']} {unit} in {len(rows)} groups; "
+                     f"{totals['completed']} completed, {totals['in_progress']} in progress, {totals['not_started']} not started, "
+                     f"{totals['past_due']} Past Due ({totals['percent_complete']}% complete)."
+                     + (f" {len(left_out)} archived people in these groups are not counted." if left_out else "")
+                     + (f" The campaigns add up to {per_campaign} people because {len(in_several)} person(s) were enrolled in more "
+                        f"than one of them." if by == "user" and in_several else "")),
+        "people_counted_per_campaign": per_campaign,
+        "people_in_several_campaigns": len(in_several),
+        "groups": rows,
+        "totals": totals,
+        "archived_not_counted": len(left_out),
+        "unknown_groups": unknown,
+        "not_in_these_campaigns": not_targeted,
+        "rule": ("each person counts once per group, by the status of their least finished module (one Past Due module makes them "
+                 "Past Due); a person in two groups is in both rows but once in the totals") if by == "user" else
+                "every module enrolment counts on its own",
+        "note": ("The table with every group is added to the answer automatically: do not list the groups again; name at most three "
+                 "that stand out and explain the totals. percent_complete "
+                 "is the share that completed, percent_past_due the share that is Past Due; never put one next to the other's count. "
+                 + NO_ADVICE),
     }
 
 

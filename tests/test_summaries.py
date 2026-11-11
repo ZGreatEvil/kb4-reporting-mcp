@@ -305,3 +305,21 @@ async def test_overview_headline_states_users_per_level():
     result = await summaries.account_risk_overview(KB(), "main")
     # active users: 10.0 Low, 80.5 Critical, 40.0 Low, one without a score
     assert result["headline"].endswith("Active users per risk level: Low 2, Critical 1 (4 in total); 2 of them failed a phishing test.")
+
+
+async def test_one_active_exact_name_is_chosen_over_archived_and_partial_matches():
+    # live on a large account: "Dewi Lestari" also matched an archived "Lestari Dewi Lestari" and the bot asked which one
+    people = [{"id": 1, "first_name": "Dewi", "last_name": "Lestari", "status": "active"},
+              {"id": 2, "first_name": "Lestari Dewi", "last_name": "Lestari", "status": "archived"},
+              {"id": 3, "first_name": "Bayu", "last_name": "Santoso", "status": "active"},
+              {"id": 4, "first_name": "Bayu", "last_name": "Santoso", "status": "active"}]
+
+    class KB:
+        async def list_users(self, console, status=None, group_id=None, max_records=None):
+            return [dict(p) for p in people]
+
+    r = await summaries.find_user(KB(), "main", "dewi  lestari")
+    assert r["ask_user"] is False and r["chosen"] == 1 and [m["id"] for m in r["matches"]] == [1, 2]
+    # two active people with exactly the same name: still ask
+    both = await summaries.find_user(KB(), "main", "Bayu Santoso")
+    assert both["ask_user"] is True and "chosen" not in both

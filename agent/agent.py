@@ -15,7 +15,7 @@ from mcp.client.streamable_http import streamable_http_client
 from agent.llm import LLMClient
 from agent.messages import DEFAULT_LANGUAGE, LANGUAGE_NAMES, msg
 from agent.normalise import normalise_with_fixes
-from agent.period import default_period, parse_period
+from agent.period import MONTHS, default_period, parse_period
 from config.settings import AppConfig, load_config
 from kb4_mcp.summaries import risk_level
 
@@ -50,7 +50,10 @@ Rules:
    security_coaching (Real-Time Coaching), password_risks (PasswordIQ), user_events (events from other security tools),
    product_status (which KnowBe4 products are in use), modstore_content (ModStore videos and coaching content),
    templates (phishing email templates, landing pages, notification emails, callback scripts), account_settings (admin roles,
-   Second Chance settings), campaign_settings (how phishing or training campaigns are set up and scheduled).
+   Second Chance settings), campaign_settings (how phishing or training campaigns are set up and scheduled),
+   training_by_group (one training campaign per group: completed, in progress, not started, Past Due), phishing_by_group
+   (phishing results per group), campaign_people (who is Past Due / not started in one campaign), group_members (who is in a
+   group), person_training (one person's trainings), coverage_gaps (never phished or trained), compare_periods (two periods).
 5. Person questions: call find_user, then user_risk_summary with the id. "Full" or "selengkapnya" history
    also means user_risk_summary; the raw history is never shown. If several people match,
    list them numbered and ask which one.
@@ -93,6 +96,11 @@ Rules:
     ModStore questions: call modstore_content when available (ModStore videos and coaching content, with in_library);
     recommend from its items that are not in_library. ModStore training courses are not listed by the API: say so.
     Training campaigns are not modules; never answer a module question from training_completion_summary.
+    One campaign per group (per grup, groups listed by name): call training_by_group with campaign or campaign_date;
+    the group names in the question are picked up automatically. Its table is added in code: do not write one.
+    Phishing per group: phishing_by_group. WHO is Past Due or not started in a campaign: campaign_people. Who is in a group:
+    group_members. One person's trainings: find_user, then person_training with the id. Never phished or trained:
+    coverage_gaps. This period against another: compare_periods. Their tables are added in code too: do not write them.
 22. Benchmark or industry comparisons: call industry_benchmark when it is available (KnowBe4's official figures per
     industry and company size). Emails employees reported as suspicious in real life are reported_emails (PhishER);
     who reported a phishing TEST is phishing_test_detail. If a tool says a product is not set up or has no data, say so.
@@ -510,7 +518,268 @@ CAUSE = re.compile(r"\b(?:karena|sebab|disebabkan|akibat|berkat|because|due to|a
 SPECULATIVE = ("wajib", "diwajibkan", "mandatory", "required", "compulsory", "prioritas", "priority", "menarik",
                "interesting", "engaging", "membosankan", "boring", "sulit", "difficult", "rumit", "complex", "mudah",
                "easy", "populer", "popular", "relevan", "relevant", "sibuk", "busy", "lupa", "forgot", "malas", "lazy",
-               "motivasi", "motivation", "kesadaran tinggi", "high awareness", "budaya", "culture")
+               "motivasi", "motivation", "kesadaran tinggi", "high awareness", "budaya", "culture",
+               # a hedged cause is a guess: "kemungkinan besar karena belum pernah terpapar"
+               "kemungkinan", "mungkin", "barangkali", "sepertinya", "diduga", "probably", "likely", "perhaps", "possibly",
+               "seems", "terpapar")
+
+
+def _with_group_training_table(answer: str, data: dict[str, Any], language: str) -> str:
+    """one campaign per group, as a table built from the data: the model ran out of tokens writing 21 rows itself"""
+    campaign, totals = data.get("campaign") or {}, data.get("totals") or {}
+
+    def num(value: Any) -> str:
+        if value is None:
+            return "-"
+        # "100,0%" read oddly next to "52,94%"
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        return f"{value}".replace(".", ",") if language == "id" else f"{value}"
+
+    unit = msg("group_training_unit_enrolment" if data.get("counted_by") == "enrolment" else "group_training_unit_user", language)
+    head = msg("group_training_line", language, name=str(campaign.get("name") or "").strip(), date=campaign.get("start_date"),
+               status=campaign.get("status"), total=totals.get("total", 0), unit=unit, groups=len(data.get("groups") or []),
+               completed=totals.get("completed", 0), in_progress=totals.get("in_progress", 0), not_started=totals.get("not_started", 0),
+               past_due=totals.get("past_due", 0), percent=num(totals.get("percent_complete")),
+               percent_past_due=num(totals.get("percent_past_due")))
+    lines = [f"**{head}**", "", msg("group_training_header", language, unit=unit.capitalize()), "|---|---|---|---|---|---|---|"]
+    for g in data.get("groups") or []:
+        lines.append(f"| {g.get('group')} | {g.get('total')} | {g.get('completed')} | {g.get('in_progress')} | {g.get('not_started')} | "
+                     f"{g.get('past_due')} | {num(g.get('percent_complete'))}{'' if g.get('percent_complete') is None else '%'} |")
+    lines.append(f"| **{msg('group_training_total', language)}** | **{totals.get('total', 0)}** | **{totals.get('completed', 0)}** | "
+                 f"**{totals.get('in_progress', 0)}** | **{totals.get('not_started', 0)}** | **{totals.get('past_due', 0)}** | "
+                 f"**{num(totals.get('percent_complete'))}{'' if totals.get('percent_complete') is None else '%'}** |")
+    notes = []
+    scored = [g for g in data.get("groups") or [] if g.get("total")]
+    if len(scored) > 1:
+        def names(rows: list[dict[str, Any]]) -> str:
+            return ", ".join(str(r.get("group")) for r in rows)
+
+        top = max(g["percent_complete"] for g in scored)
+        low = min(g["percent_complete"] for g in scored)
+        most = max(g.get("past_due", 0) for g in scored)
+        big = max(g["total"] for g in scored)
+        notes.append(msg("group_training_standouts", language,
+                         top=names([g for g in scored if g["percent_complete"] == top]), top_pct=num(top),
+                         low=names([g for g in scored if g["percent_complete"] == low]), low_pct=num(low),
+                         most=names([g for g in scored if g.get("past_due", 0) == most]), most_n=most,
+                         big=names([g for g in scored if g["total"] == big]), big_n=big))
+    if data.get("counted_by") != "enrolment":
+        notes.append(msg("group_training_rule", language))
+    if data.get("archived_not_counted"):
+        notes.append(msg("group_training_archived", language, count=data["archived_not_counted"]))
+    if data.get("people_in_several_campaigns") and data.get("counted_by") != "enrolment":
+        notes.append(msg("group_training_overlap", language, per_campaign=data.get("people_counted_per_campaign"),
+                         count=data["people_in_several_campaigns"], total=totals.get("total", 0)))
+    if data.get("unknown_groups"):
+        notes.append(msg("group_training_unknown", language, names=", ".join(data["unknown_groups"])))
+    if data.get("not_in_these_campaigns"):
+        notes.append(msg("group_training_not_targeted", language, names=", ".join(data["not_in_these_campaigns"])))
+    # keep only the model's explanation: drop its own headline and any table it wrote
+    rest = [ln for ln in answer.splitlines() if not ln.lstrip().startswith("|")]
+    if rest and rest[0].lstrip().startswith("**"):
+        rest = rest[1:]
+    groups = data.get("groups") or []
+
+    def bad(sentence: str) -> bool:
+        # superlatives about groups come from the line above; the model's own ones were wrong
+        # superlatives come from the standouts line; the model's own ones were wrong, also with misspelt names
+        return _wrong_group_numbers(sentence, groups) or SUPERLATIVE.search(sentence) is not None
+
+    rest = _drop_sentences_where("**x**\n" + "\n".join(rest), bad).split("\n")[1:]
+    text = "\n".join(lines) + ("\n\n" + "\n".join(f"*{n}*" for n in notes) if notes else "")
+    return (text + "\n\n" + "\n".join(rest).strip()).strip()
+
+
+# "terbaik", "tertinggi", "largest": a comparison across groups, which the model got wrong three times in one answer
+SUPERLATIVE = re.compile(r"\b(?:terbaik|terburuk|tertinggi|terendah|terbesar|terkecil|terbanyak|tersedikit|paling|best|worst|highest|"
+                         r"lowest|largest|smallest|most|least|top|bottom)\b", re.I)
+# "hapus semua pengguna" once got a users list: changes are refused in code, before the model. only a request that
+# starts with the action counts ("which campaigns auto-enrol new users?" and "siapa yang kirim email" are questions)
+WRITE_ASK = re.compile(
+    r"^\s*(?:(?:tolong|please|pls|coba|mohon|bisa(?:kah)?|can you|could you|would you|kamu|anda)\s+)*"
+    r"(?:hapus\w*|menghapus|delete|remove|ubah|mengubah|ganti|edit|update|tambah\w*|menambah\w*|add|create|reset|arsipkan|archive|"
+    r"tugaskan|assign|enrol(?:l)?|daftarkan|kirim\w*|send|jalankan|launch|nonaktifkan|aktifkan|disable|enable|blokir|block)"
+    r"\s+(?:(?:semua|all|the|a|an|new|baru|ini|itu|para|seluruh)\s+)*"
+    r"(?:pengguna|users?|grup\w*|groups?|kampanye|campaigns?|training|pelatihan|templat\w*|templates?|akun|accounts?|admin\w*|"
+    r"role\w*|email\w*|phishing|tes|tests?|data|karyawan|employees?|anggota|members?)\b", re.I)
+# "console mars": a name that is not one of the configured consoles got the main console's score
+CONSOLE_NAMED = re.compile(r"\b(?:console|konsol)\s+([A-Za-z][\w-]*)", re.I)
+NOT_A_CONSOLE_NAME = {"ini", "itu", "kita", "yang", "mana", "apa", "saya", "kami", "the", "this", "our", "which", "all", "semua", "lain",
+                      "other", "knowbe4", "utama", "main", "default"}
+# "risk score Zzyzx Qwertyuiop" was taken for a console; capitalised words after a risk word are a person
+PERSON_RISK = re.compile(r"\b(?:risk ?score|skor risiko|nilai risiko|risiko|phish-?prone(?: %)?)\s+(?:(?:dari|milik|untuk|of|for)\s+)?"
+                         r"([A-Z][\w'.-]*(?:\s+[A-Z][\w'.-]*){0,3})")
+NOT_A_PERSON = {"organisasi", "kita", "saat", "sekarang", "low", "medium", "high", "critical", "knowbe4", "now", "our", "the",
+                "console", "konsol", "grup", "group", "tim", "team", "rata", "average", "terbaru", "latest", "bulan", "tahun"}
+# "1 grup gagal", "2 groups reported": failures and reports are people (or emails), never groups
+GROUPS_AS_PEOPLE = re.compile(r"\b\d+\s+(?:grup|groups?)\s+(?:yang\s+)?(?:gagal|melapor\w*|klik\w*|failed|reported|clicked)\b", re.I)
+ARCHIVED_ASK = re.compile(r"\b(?:arsip\w*|diarsipkan|archived?|include archived|termasuk (?:yang )?(?:sudah )?(?:diarsipkan|arsip))\b", re.I)
+
+
+def _wrong_group_numbers(sentence: str, rows: list[dict[str, Any]]) -> bool:
+    """a number written after a group's name must be one of that group's numbers: the model once gave Group-E1
+    "99% Past Due" (it is 86.08), and 99 exists elsewhere in the data, so the general check let it through"""
+    names = sorted((str(r.get("group") or "") for r in rows if r.get("group")), key=len, reverse=True)
+    spots = sorted({(m.start(), name) for name in names
+                    for m in re.finditer(rf"(?<![\w-]){re.escape(name)}(?![\w-])", sentence, re.I)})
+    if not spots:
+        return False
+    by_name = {str(r.get("group")).casefold(): r for r in rows}
+    for i, (start, name) in enumerate(spots):
+        end = spots[i + 1][0] if i + 1 < len(spots) else len(sentence)
+        row = by_name[name.casefold()]
+        allowed = [float(v) for k, v in row.items() if k != "group" and isinstance(v, (int, float))]
+        for token in NUMBER_TOKEN.findall(sentence[start + len(name):end]):
+            value = float(token.replace(".", "").replace(",", ".")) if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", token) else \
+                float(token.replace(",", "."))
+            # rounding is fine: 86 or 86,1 for 86.08
+            if not any(abs(value - a) < 0.5 + 1e-9 for a in allowed):
+                return True
+    return False
+
+
+# rows, columns and how each row reads, per tool; a table the model wrote is replaced by these
+BREAKDOWN_TABLES = {
+    "phishing_by_group": ("groups", lambda r, n: [r.get("group"), n(r.get("delivered")), n(r.get("failed")), n(r.get("clicked")),
+                                                  n(r.get("entered_data")), n(r.get("opened_attachment")), n(r.get("reported")),
+                                                  n(r.get("failure_percent"), "%"), n(r.get("report_percent"), "%")]),
+    "campaign_people": ("people", lambda r, n: [None, r.get("name"), r.get("email"), r.get("status"),
+                                                "; ".join(f"{m.get('module')} ({m.get('status')})" for m in r.get("modules") or [])]),
+    "group_members": ("members", lambda r, n: [None, r.get("name"), r.get("email"), n(r.get("risk_score")), r.get("risk_level"),
+                                               n(r.get("phish_prone_percent"), "%"), n(r.get("past_due_training"))]),
+    "person_training": ("enrolments", lambda r, n: [r.get("campaign"), r.get("module"), r.get("status"), r.get("enrolled"),
+                                                    r.get("completed"), n(r.get("minutes"))]),
+    "coverage_gaps": ("people_with_neither", lambda r, n: [None, r.get("name"), r.get("email"), r.get("joined")]),
+}
+
+
+def _with_breakdown_table(answer: str, name: str, data: dict[str, Any], language: str) -> str:
+    """the table for a breakdown tool, built from its data; the model's own table goes. phishing per group gets the same
+    checks as training per group: a number after a group's name must be that group's, superlatives come from code"""
+
+    def num(value: Any, suffix: str = "") -> str:
+        if value is None:
+            return "-"
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        return (f"{value}".replace(".", ",") if language == "id" else f"{value}") + suffix
+
+    def cell(value: Any) -> str:
+        return str(value if value not in (None, "") else "-").replace("|", "/").replace("\n", " ").strip()
+
+    lines: list[str] = []
+    # a comparison without its metric or periods (an odd result) leaves the model's answer as it is instead of failing
+    comparison = name == "compare_periods" and bool(data.get("current")) and data.get("metric") in ("phishing", "training")
+    if comparison:
+        a, b = data.get("current") or {}, data.get("earlier") or {}
+        keys = (["tests", "delivered", "phish_prone_percent", "reported", "report_percent"] if data.get("metric") == "phishing"
+                else ["enrolments", "completed", "past_due", "completion_percent", "past_due_percent"])
+        labels = msg(f"compare_rows_{data.get('metric')}", language).split("|")
+        header = msg("table_compare", language, a=cell(a.get("period")), b=cell(b.get("period")))
+        lines = [header, "|---|---|---|"] + [f"| {label} | {num(a.get(k), '%' if 'percent' in k else '')} | "
+                                             f"{num(b.get(k), '%' if 'percent' in k else '')} |" for label, k in zip(labels, keys, strict=False)]
+    elif name in BREAKDOWN_TABLES:
+        key, build = BREAKDOWN_TABLES[name]
+        rows = data.get(key) or []
+        if rows:
+            header = msg(f"table_{name}", language)
+            if name == "coverage_gaps":
+                lines.append(f"*{msg('coverage_neither_heading', language)}*")
+                lines.append("")
+            lines += [header, "|" + "---|" * (header.count("|") - 1)]
+            for i, r in enumerate(rows, start=1):
+                lines.append("| " + " | ".join(str(i) if v is None else cell(v) for v in build(r, num)) + " |")
+            total = data.get("total") if name != "coverage_gaps" else data.get("neither")
+            if isinstance(total, int) and total > len(rows):
+                lines += ["", msg("breakdown_more", language, n=total - len(rows))]
+    notes = []
+    groups = data.get("groups") if name == "phishing_by_group" else None
+    scored = [g for g in groups or [] if g.get("delivered")]
+    if len(scored) > 1:
+        top = max(g["failure_percent"] for g in scored)
+        rep = max(g["report_percent"] for g in scored)
+        big = max(g["delivered"] for g in scored)
+
+        def names(rows: list[dict[str, Any]]) -> str:
+            return ", ".join(str(r.get("group")) for r in rows)
+
+        notes.append(msg("phishing_group_standouts", language, top=names([g for g in scored if g["failure_percent"] == top]),
+                         top_pct=num(top), rep=names([g for g in scored if g["report_percent"] == rep]), rep_pct=num(rep),
+                         big=names([g for g in scored if g["delivered"] == big]), big_n=big))
+    if data.get("unknown_groups"):
+        notes.append(msg("group_training_unknown", language, names=", ".join(data["unknown_groups"])))
+    if data.get("archived_not_counted"):
+        notes.append(msg("group_training_archived", language, count=data["archived_not_counted"]))
+    rest = [ln for ln in answer.splitlines() if not ln.lstrip().startswith("|")]
+    first = rest[0] if rest and rest[0].lstrip().startswith("**") else None
+    rest = rest[1:] if first else rest
+    if name == "phishing_by_group" and data.get("totals"):
+        # the model counted groups as failing ("1 grup gagal (25%)"): it is people, or emails over several tests
+        t, tests = data["totals"], data.get("tests") or []
+        what = (f"\"{tests[0].get('name')}\" ({tests[0].get('started_at')})" if len(tests) == 1 else
+                f"{len(tests)} ({tests[-1].get('started_at')} – {tests[0].get('started_at')})" if tests else "")
+        unit = msg("phishing_unit_people" if len(tests) == 1 else "phishing_unit_emails", language)
+        first = "**" + msg("phishing_group_line", language, what=what, delivered=t.get("delivered", 0), groups=len(groups or []),
+                           failed=t.get("failed", 0), fpct=num(t.get("failure_percent"), "%"), reported=t.get("reported", 0),
+                           rpct=num(t.get("report_percent"), "%"), unit=unit) + "**"
+    if comparison:
+        # the model wrote "peningkatan risiko yang signifikan" and "2 vs 1 tests: fewer"; the line comes from the numbers
+        key = "phish_prone_percent" if data.get("metric") == "phishing" else "completion_percent"
+        a, b, change = data["current"], data.get("earlier") or {}, data.get("change_points")
+        sign = num(change) if not isinstance(change, (int, float)) or change <= 0 else "+" + num(change)
+        how = (msg("compare_missing", language) if change is None else msg("compare_same", language) if change == 0 else
+               msg("compare_better" if data.get("better") else "compare_worse", language, points=sign))
+        first = "**" + msg("compare_line", language, label=msg(f"compare_label_{data.get('metric')}", language),
+                           a=num(a.get(key), "%"), pa=a.get("period"), b=num(b.get(key), "%"), pb=b.get("period"), change=how) + "**"
+    if groups:
+
+        def bad(sentence: str) -> bool:
+            # superlatives come from the standouts line (a misspelt group name slipped past a name check)
+            return (_wrong_group_numbers(sentence, groups) or SUPERLATIVE.search(sentence) is not None
+                    or GROUPS_AS_PEOPLE.search(sentence) is not None)
+
+        rest = _drop_sentences_where("**x**\n" + "\n".join(rest), bad).split("\n")[1:]
+    parts = [first or "", "\n".join(lines), "\n".join(f"*{n}*" for n in notes), "\n".join(rest).strip()]
+    return "\n\n".join(p for p in parts if p).strip()
+
+
+def _campaign_choices(matches: list[dict[str, Any]], language: str) -> str:
+    """several campaigns match (four started on 2026-10-07): the list comes from the data, not the model"""
+    lines = [f"**{msg('campaign_choices', language)}**", ""]
+    for i, m in enumerate(matches, start=1):
+        groups = m.get("groups") or []
+        shown = ", ".join(groups[:4]) + ("…" if len(groups) > 4 else "")
+        lines.append(f"{i}. {str(m.get('name') or '').strip()} (ID {m.get('campaign_id')}, {m.get('start_date')}"
+                     + (f"; {shown}" if shown else "") + ")")
+    return "\n".join(lines + ["", msg("campaign_choices_hint", language)])
+
+
+COMPARE_SPLIT = re.compile(r"\b(?:dengan|dibanding(?:kan)?(?: dengan)?|vs\.?|versus|compared (?:to|with)|against|terhadap)\b", re.I)
+
+
+def _two_periods(text: str) -> tuple[Any, Any]:
+    """the period on each side of "A dengan/vs B"; one side or none when the question names fewer"""
+    parts = COMPARE_SPLIT.split(text, maxsplit=1)
+    if len(parts) == 2:
+        return parse_period(parts[0]), parse_period(parts[1])
+    return parse_period(text), None
+
+
+def _question_date(text: str) -> str | None:
+    """one exact day in the question: 2026-10-07, 07/10/2026 or 7 oktober 2026"""
+    if m := re.search(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b", text):
+        y, mo, d = int(m[1]), int(m[2]), int(m[3])
+    elif m := re.search(r"\b(\d{1,2})/(\d{1,2})/(20\d{2})\b", text):
+        d, mo, y = int(m[1]), int(m[2]), int(m[3])
+    elif m := re.search(r"\b(\d{1,2})\s+(" + "|".join(sorted(MONTHS, key=len, reverse=True)) + r")\s+(20\d{2})\b", text, re.I):
+        d, mo, y = int(m[1]), MONTHS[m[2].lower()], int(m[3])
+    else:
+        return None
+    try:
+        return date(y, mo, d).isoformat()
+    except ValueError:
+        return None
 
 
 def _drop_sentences_where(answer: str, bad: Any) -> str:
@@ -657,15 +926,81 @@ def _without_closing_offer(answer: str) -> str:
 
 MODEL_LINK = re.compile(r"!?\[[^\]]*\]\((?:/static/|/exports/|https?://)[^)]*\)")
 # any image the model writes is made up (it once drew a broken "Detail tes phishing" image); only code adds images
-MODEL_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+# raw html images too: the page used to show them (a full-width icon on one phone, a stray dot elsewhere)
+MODEL_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)|<img\b[^>]*>", re.I)
+
+
+CHART_ROWS = 12
+
+
+def _chart_text(item: dict[str, Any], language: str) -> str:
+    """what the chart shows, as a small table from the same numbers, in case the image does not load or is hard to read"""
+    chart, data = item.get("chart"), item.get("summary") or {}
+
+    def num(value: Any, suffix: str = "") -> str:
+        if value is None:
+            return "-"
+        if suffix == "%" and isinstance(value, float) and value.is_integer():
+            value = int(value)
+        text = f"{value}".replace(".", ",") if language == "id" and isinstance(value, float) else f"{value}"
+        return text + suffix
+
+    def cell(value: Any) -> str:
+        return str(value if value is not None else "-").replace("|", "/").strip()
+
+    rows: list[list[str]] = []
+    extra = ""
+    if chart == "users_by_level":
+        rows = [[level, num(n)] for level, n in (data.get("users_per_level") or {}).items()]
+    elif chart == "top_users":
+        rows = [[str(i), cell(u.get("name")), num(u.get("risk_score")), cell(u.get("risk_level"))]
+                for i, u in enumerate(data.get("users") or [], start=1)]
+    elif chart == "phishing_tests":
+        rows = [[cell(x.get("name")), cell(x.get("started_at")), num(x.get("phish_prone_percent"), "%")] for x in data.get("tests") or []]
+        rows.reverse()  # drawn oldest at the bottom; the text reads newest first
+    elif chart == "groups":
+        rows = [[cell(g.get("name")), num(g.get("risk_score")), cell(g.get("risk_level")), num(g.get("active_users"))]
+                for g in data.get("groups") or []]
+    elif chart == "training_completion":
+        rows = [[cell(c.get("name")), cell(c.get("start_date")), num(c.get("completion_percentage"), "%")] for c in data.get("campaigns") or []]
+        rows.reverse()
+    elif chart == "modules":
+        rows = [[cell(m.get("module")), num(m.get("enrolled")), num(m.get("passed")), num(m.get("in_progress")), num(m.get("not_started")),
+                 num(m.get("past_due")), num(m.get("completion_percent"), "%")] for m in data.get("modules") or []]
+    elif chart == "reported_emails":
+        rows = [[cell(month), num(n)] for month, n in (data.get("per_month") or {}).items()]
+        categories = data.get("by_category") or {}
+        if categories or data.get("still_open") is not None:
+            extra = msg("chart_categories", language, items=", ".join(f"{k} {v}" for k, v in categories.items()) or "-",
+                        open=num(data.get("still_open")))
+    elif chart in ("risk_trend", "group_trend"):
+        points = [("chart_point_first", data.get("from"), data.get("first_score")),
+                  ("chart_point_lowest", (data.get("lowest") or {}).get("date"), (data.get("lowest") or {}).get("score")),
+                  ("chart_point_highest", (data.get("highest") or {}).get("date"), (data.get("highest") or {}).get("score")),
+                  ("chart_point_last", data.get("to"), data.get("last_score"))]
+        rows = [[msg(key, language), cell(day), num(score)] for key, day, score in points if day]
+        chart = "trend"
+    if not rows:
+        return ""
+    columns = msg(f"chart_cols_{chart}", language)
+    title = str(item.get("title") or "").strip()
+    lines = [f"**{msg('chart_data', language)}{': ' + title if title else ''}**", "", columns, "|" + "---|" * (columns.count("|") - 1)]
+    lines += ["| " + " | ".join(r) + " |" for r in rows[:CHART_ROWS]]
+    if len(rows) > CHART_ROWS:
+        lines += ["", msg("chart_more", language, n=len(rows) - CHART_ROWS)]
+    if extra:
+        lines += ["", extra]
+    return "\n".join(lines)
 
 
 def _with_attachments(answer: str, made: list[dict[str, Any]], language: str) -> str:
-    """charts and csv links come from the tool results; links the model wrote itself are dropped (it garbles them)"""
+    """charts and csv links come from the tool results; links the model wrote itself are dropped (it garbles them).
+    every chart is followed by its numbers as text"""
     parts = [MODEL_LINK.sub("", answer).strip()]
     for item in made:
         if item.get("image_url"):
             parts.append(f"![{item.get('title') or 'chart'}]({item['image_url']})")
+            parts.append(_chart_text(item, language))
         if item.get("download_url"):
             label = msg("download_csv", language, file=item.get("file_name"), rows=item.get("rows"))
             parts.append(f"**[{label}]({item['download_url']})**")
@@ -700,11 +1035,36 @@ PHISHER_ASK = re.compile(
 )
 # whole words: "tim\w*" took "over time" for a team
 GROUP_WORD = r"\b(?:grup\w*|groups?|kelompok\w*|divisi\w*|departemen\w*|departments?|tim|teams?)\b"
+PHISHING_RESULT = r"\b(?:phish\w*|klik\w*|click\w*|gagal|tertipu|ketipu|lapor\w*|report\w*|failed)\b"
+TRAINING_STATUS = (r"\b(?:complete\w*|completion|selesai\w*|lulus|passed|past ?due|in ?progress|sedang berjalan|belum mulai|"
+                   r"not started|enrol\w*|terdaftar)\b")
 TREND_WORD = (r"\b(?:tren\w*|trend\w*|dari waktu ke waktu|over time|membaik|memburuk|getting (?:better|worse)|improv\w*"
               r"|riwayat|history|naik|turun|perkembangan)\b")
 TOPIC_TOOLS = (
     # before the library: with the coaching key, modstore questions get the catalogue, not only what the account has
     (MODSTORE_ASK, "modstore_content", {"modstore_content"}),
+    # training status per group: the model wrote a 21-row table itself and was cut off at the token limit
+    (re.compile(GROUP_WORD + r"[^?!]{0,300}" + TRAINING_STATUS + "|" + TRAINING_STATUS + r"[^?!]{0,300}" + GROUP_WORD, re.I),
+     "training_by_group", {"training_by_group"}),
+    # phishing per group: the same join as training per group, which the model could not do
+    (re.compile(GROUP_WORD + r"[^?!]{0,200}" + PHISHING_RESULT + "|" + PHISHING_RESULT + r"[^?!]{0,200}" + GROUP_WORD, re.I),
+     "phishing_by_group", {"phishing_by_group", "risk_by_group", "group_members"}),
+    # the people behind a campaign's numbers
+    (re.compile(r"\b(?:siapa|who|nama|names?|daftar|list)\b[^?!]{0,80}" + TRAINING_STATUS + r"[^?!]{0,80}\b(?:campaign|kampanye)\b"
+                r"|\b(?:campaign|kampanye)\b[^?!]{0,80}\b(?:siapa|who|nama|names?|daftar|list)\b[^?!]{0,80}" + TRAINING_STATUS, re.I),
+     "campaign_people", {"campaign_people", "overdue_training", "training_by_group"}),
+    # who is in a group
+    (re.compile(r"\b(?:anggota|members?|siapa (?:saja|aja)? ?(?:yang )?(?:ada )?di|who(?:'s| is| are) in)\b[^?!]{0,40}" + GROUP_WORD
+                + r"|" + GROUP_WORD + r"[^?!]{0,60}\b(?:anggota\w*|members?)\b", re.I),
+     "group_members", {"group_members", "risk_by_group", "phishing_by_group", "training_by_group"}),
+    # never phished or trained
+    (re.compile(r"\b(?:belum pernah|tidak pernah|never|not yet|unphished|untrained|tanpa)\b[^?!]{0,40}"
+                r"\b(?:dites|di-?tes|tes phishing|phish\w*|simulasi|test\w*|training|pelatihan|ditraining|dilatih|enrol\w*|terdaftar)\b", re.I),
+     "coverage_gaps", {"coverage_gaps"}),
+    # two periods side by side
+    (re.compile(r"\b(?:banding\w*|dibanding\w*|compare\w*|comparison|vs\.?|versus)\b[^?!]{0,80}\b(?:phishing|phish-?prone|training|pelatihan)\b"
+                r"|\b(?:phishing|phish-?prone|training|pelatihan)\b[^?!]{0,80}\b(?:banding\w*|dibanding\w*|compare\w*|vs\.?|versus)\b", re.I),
+     "compare_periods", {"compare_periods"}),
     # before callback, new joiners and modules: "skrip callback", "auto-enrol new users" and "jadwal" are settings questions
     (re.compile(r"\b(?:templat\w*|templates?|landing ?pages?|halaman landing|email notifikasi|notification emails?|"
                 r"skrip (?:telepon|callback)|callback scripts?)\b", re.I),
@@ -836,6 +1196,7 @@ CAPABILITY_ASK = re.compile(
 )
 # tools that take start_date / end_date; the question's period is put into their arguments
 PERIOD_TOOLS = {
+    "phishing_by_group", "coverage_gaps", "compare_periods",
     "phishing_campaign_summary", "repeat_phishing_failures", "phishing_test_detail", "training_completion_summary",
     "overdue_training", "account_risk_overview", "user_risk_summary", "make_chart", "export_csv",
     "training_by_module", "group_risk_trend", "new_joiners", "callback_phishing_summary",
@@ -849,7 +1210,8 @@ PRODUCT_TOOLS = {
     "account_settings": "ksat", "campaign_settings": "ksat",
 }
 # current status, not something that happened in a period: the default year is not applied
-NO_DEFAULT_PERIOD = {"overdue_training", "training_by_module", "training_library"}
+# phishing_by_group defaults to the latest test and compare_periods to the last 90 days against the 90 before
+NO_DEFAULT_PERIOD = {"overdue_training", "training_by_module", "training_library", "phishing_by_group", "compare_periods"}
 # the chart attached when an answer used one of these tools and has none yet (first match wins)
 CHART_FOR_TOOL = (
     ("reported_emails", "reported_emails"),
@@ -1038,6 +1400,29 @@ class Agent:
             args.pop("start_date", None)
             args.pop("end_date", None)
             args.update(state["period"].args())
+        if name == "compare_periods":
+            # "kuartal ini dengan kuartal lalu": the model guessed both quarters; each side of the comparison has its period
+            first, second = _two_periods(state.get("prompt", ""))
+            for key in ("start_date", "end_date", "compare_start", "compare_end"):
+                args.pop(key, None)
+            if first:
+                args.update(first.args())
+            if second:
+                args["compare_start"], args["compare_end"] = second.args().get("start_date"), second.args().get("end_date")
+        if name in ("phishing_by_group", "campaign_people", "group_members"):
+            # names of groups (and the campaign's day) come from the question itself
+            args["text"] = state.get("prompt", "")
+            if name == "campaign_people" and not args.get("campaign_date") and (day := _question_date(state.get("prompt", ""))):
+                args["campaign_date"] = day
+            if name != "group_members":
+                args["include_archived"] = bool(ARCHIVED_ASK.search(state.get("prompt", "")))
+        if name == "training_by_group" or (name == "export_csv" and args.get("dataset") == "training_by_group"):
+            # the tool finds group names in the question itself (the model dropped some of 21), and the campaign's day
+            args["text"] = state.get("prompt", "")
+            if not args.get("campaign_date") and (day := _question_date(state.get("prompt", ""))):
+                args["campaign_date"] = day
+            # archived people only when the question asks: the model switched it on by itself once (798 instead of 775)
+            args["include_archived"] = bool(ARCHIVED_ASK.search(state.get("prompt", "")))
         if name in ("make_chart", "export_csv") and "user_id" in args and not str(args["user_id"]).strip().isdigit():
             # it sent user_id "" or "organisasi" for the organisation's history, which then failed validation
             args.pop("user_id")
@@ -1097,6 +1482,25 @@ class Agent:
                 gid = None
             if isinstance(gid, int):
                 state["trend_group_id"] = gid
+        if name in ("training_by_group", "export_csv") and not getattr(result, "is_error", False):
+            try:
+                grouped = json.loads(text)
+            except ValueError:
+                grouped = None
+            if isinstance(grouped, dict) and grouped.get("ask_user") and grouped.get("matches"):
+                state["campaign_choices"] = grouped["matches"]
+            elif name == "training_by_group" and isinstance(grouped, dict) and grouped.get("groups") is not None:
+                state["group_training"] = grouped
+        # compare_periods builds its own table (two columns), so it is not in BREAKDOWN_TABLES; it was never kept once
+        if (name in BREAKDOWN_TABLES or name == "compare_periods") and not getattr(result, "is_error", False):
+            try:
+                found = json.loads(text)
+            except ValueError:
+                found = None
+            if isinstance(found, dict) and found.get("ask_user") and found.get("matches"):
+                state["campaign_choices"] = found["matches"]
+            elif isinstance(found, dict) and not found.get("error") and not found.get("ask_user"):
+                state["breakdown"] = (name, found)
         if name == "training_library" and not getattr(result, "is_error", False):
             try:
                 library = json.loads(text)
@@ -1115,8 +1519,8 @@ class Agent:
             try:
                 found = json.loads(text)
                 state["ask_user"] = bool(found.get("ask_user"))
-                if found.get("match_count") == 1:
-                    state["single_match_id"] = found["matches"][0].get("id")
+                if found.get("match_count") == 1 or found.get("chosen"):
+                    state["single_match_id"] = found.get("chosen") or found["matches"][0].get("id")
                 elif state["ask_user"]:
                     # "Rina Putri" in the question picks her even when the model searched only "rina":
                     # the one person with at least two name words in the question
@@ -1195,6 +1599,29 @@ class Agent:
         print(f"[AGENT] Fresh data asked: refreshed={refreshed}", flush=True)
         return {"refreshed": refreshed, "age": max(ages) if ages else None}
 
+    def _console_names(self) -> set[str]:
+        names = set()
+        for key, c in self.config.consoles.items():
+            names.add(key.casefold())
+            names.update(w.casefold() for w in re.findall(r"[\w-]+", c.display_name))
+        return names
+
+    def _unknown_console(self, prompt: str) -> str | None:
+        m = CONSOLE_NAMED.search(prompt)
+        if not m or m[1].casefold() in NOT_A_CONSOLE_NAME | self._console_names():
+            return None
+        return m[1]
+
+    def _named_person(self, prompt: str) -> str | None:
+        m = PERSON_RISK.search(prompt)
+        if not m:
+            return None
+        words = m[1].split()
+        # a console's name or a plain word is not a person; one acronym ("IT") is a group more likely than a person
+        if any(w.casefold() in NOT_A_PERSON | self._console_names() for w in words) or (len(words) == 1 and words[0].isupper()):
+            return None
+        return m[1]
+
     def _default_console(self) -> str | None:
         return next((k for k, c in self.config.consoles.items() if c.has_api_key), None)
 
@@ -1224,6 +1651,16 @@ class Agent:
         if CAPABILITY_ASK.search(prompt):
             print("[AGENT] Capability question, answering with the fixed list", flush=True)
             yield {"type": "done", "answer": self.capability_text(language), "note": ""}
+            return
+        # "update data terbaru" asks for fresh data, which is a read
+        if WRITE_ASK.search(prompt) and not FRESH_ASK.search(prompt):
+            print("[AGENT] Asked to change data, answering that this is read-only", flush=True)
+            yield {"type": "done", "answer": msg("read_only", language), "note": ""}
+            return
+        if (missing := self._unknown_console(prompt)) is not None:
+            print("[AGENT] Unknown console named, answering with the list", flush=True)
+            consoles = ", ".join(f"{c.display_name} ({k})" for k, c in self.config.consoles.items())
+            yield {"type": "done", "answer": msg("unknown_console", language, name=missing, consoles=consoles), "note": ""}
             return
         max_loops = self.config.llm_max_tool_loops
 
@@ -1325,6 +1762,9 @@ class Agent:
                                 offset = 0
                             exact = msg("call_page", language, offset=offset)
                             call = ("list_users_page", {"console": console, "offset": offset})
+                        elif (person_name := self._named_person(prompt)) and not state.get("find_user") and not state.get("user_risk_summary"):
+                            exact = msg("call_find_user", language, name=person_name)
+                            call = ("find_user", {"console": console, "query": person_name})
                         elif CHART_ASK.search(prompt) and not state.get("make_chart"):
                             # it once said "grafik telah ditampilkan" without drawing anything
                             person = state.get("single_match_id") or state.get("last_person_id")
@@ -1401,7 +1841,7 @@ class Agent:
                     # (rounding and id/en separators allowed); nothing calculated, estimated or made up
                     if state.get("data_tools"):
                         shown = NOTE_LINE.sub("", answer)
-                        if state.get("users_page"):
+                        if state.get("users_page") or state.get("group_training") or state.get("breakdown"):
                             # its headline and table rows are replaced by ones built from the data, so only the rest counts
                             rest = [ln for ln in shown.splitlines() if not ln.lstrip().startswith("|")]
                             shown = "\n".join(rest[1:] if rest and rest[0].lstrip().startswith("**") else rest)
@@ -1476,6 +1916,12 @@ class Agent:
                         answer += "\n\n" + msg("which_one", language)
                     if state.get("users_page"):
                         answer = _with_users_table(answer, state["users_page"], language)
+                    if state.get("group_training"):
+                        answer = _with_group_training_table(answer, state["group_training"], language)
+                    elif state.get("breakdown"):
+                        answer = _with_breakdown_table(answer, *state["breakdown"], language)
+                    elif state.get("campaign_choices"):
+                        answer = _campaign_choices(state["campaign_choices"], language)
                     if state.get("nist_sources"):
                         # citations come from what search_nist returned, so they are never missing or made up
                         cited = "; ".join(

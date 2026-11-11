@@ -202,6 +202,13 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         raise SettingsError(f"{config_path.name} is not valid YAML{line}. Compare it with config/consoles.example.yaml.") from None
     if not isinstance(data, dict):
         raise SettingsError(f"{config_path.name} must start with 'consoles:'. Compare it with config/consoles.example.yaml.")
+    # a file without the "consoles:" line (or with "console:") loaded as zero consoles and the server started anyway
+    if unknown := sorted(str(k) for k in data if k != "consoles"):
+        raise SettingsError(f"{config_path.name} has unknown top-level entries: {', '.join(unknown)}. "
+                            "Every console goes under 'consoles:'; compare it with config/consoles.example.yaml.")
+    if not data.get("consoles"):
+        raise SettingsError(f"{config_path.name} lists no consoles. Add at least one under 'consoles:'; "
+                            "compare it with config/consoles.example.yaml.")
     try:
         return AppConfig(consoles=data.get("consoles") or {})
     except ValidationError as exc:

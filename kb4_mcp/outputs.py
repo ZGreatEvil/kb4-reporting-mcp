@@ -29,6 +29,7 @@ from kb4_mcp.summaries import (  # noqa: E402
     _within,
     risk_by_group,
     risk_level,
+    training_by_group,
     training_by_module,
 )
 
@@ -42,7 +43,7 @@ CHARTS = ("risk_trend", "users_by_level", "top_users", "phishing_tests", "traini
           "reported_emails")
 # charts of data over time; the others show today's state, which has no period
 PERIOD_CHARTS = {"risk_trend", "phishing_tests", "training_completion", "group_trend", "reported_emails"}
-DATASETS = ("users", "phishing_tests", "training_campaigns", "risk_history", "modules", "reported_emails")
+DATASETS = ("users", "phishing_tests", "training_campaigns", "risk_history", "modules", "reported_emails", "training_by_group")
 
 LEVEL_ORDER = ["Low", "Medium", "High", "Critical"]
 LEVEL_COLOURS = {"Low": "#16a34a", "Medium": "#f59e0b", "High": "#ea580c", "Critical": "#dc2626"}
@@ -194,6 +195,9 @@ async def make_chart(
                 "to": points[-1][0] if points else None,
                 "first_score": _r(ys[0]) if ys else None,
                 "last_score": _r(ys[-1]) if ys else None,
+                # the text under the chart names the extremes too, in case the image does not load
+                "lowest": {"date": min(points, key=lambda p: p[1])[0], "score": _r(min(ys))},
+                "highest": {"date": max(points, key=lambda p: p[1])[0], "score": _r(max(ys))},
                 "dashed_lines": "level borders at 40 (Low/Medium), 47 (Medium/High), 53 (High/Critical)",
             }
 
@@ -322,7 +326,8 @@ def _cell(value: Any) -> Any:
 
 async def export_csv(
     kb: Any, console: str, dataset: str, user_id: int | None = None, status: str = "active",
-    start_date: str | None = None, end_date: str | None = None,
+    start_date: str | None = None, end_date: str | None = None, campaign: str | None = None, campaign_date: str | None = None,
+    groups: str | None = None, text: str | None = None,
 ) -> dict[str, Any]:
     if problem := _bad_period(start_date, end_date):
         return {"error": True, "message": problem}
@@ -356,6 +361,16 @@ async def export_csv(
         header = ["module", "type", "enrolled", "passed", "past_due", "in_progress", "not_started", "completion_percent", "typical_minutes"]
         rows = [[m["module"], m["type"], m["enrolled"], m["passed"], m["past_due"], m["in_progress"], m["not_started"],
                  m["completion_percent"], m["typical_minutes"]] for m in data.get("modules", [])]
+    elif dataset == "training_by_group":
+        data = await training_by_group(kb, console, campaign, campaign_date, groups, "user", text)
+        if data.get("error") or data.get("ask_user"):
+            return data
+        header = ["group", "people", "completed", "in_progress", "not_started", "past_due", "percent_complete", "archived_not_counted"]
+        rows = [[g["group"], g["total"], g["completed"], g["in_progress"], g["not_started"], g["past_due"], g["percent_complete"],
+                 g.get("archived_not_counted", 0)] for g in data["groups"]]
+        t = data["totals"]
+        rows.append(["Total (each person once)", t["total"], t["completed"], t["in_progress"], t["not_started"], t["past_due"],
+                     t["percent_complete"], data.get("archived_not_counted", 0)])
     elif dataset == "reported_emails":
         messages, _ = await _all_messages(kb, console)
         header = ["reported_at", "subject", "from", "reported_by", "category", "severity", "status"]

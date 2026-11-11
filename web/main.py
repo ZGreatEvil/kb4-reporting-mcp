@@ -33,6 +33,10 @@ except PackageNotFoundError:
 app = FastAPI(
     title="KnowBe4 AI Analyst",
     version=VERSION,
+    # the page needs none of these; /docs loaded swagger from a CDN the CSP blocks, and the schema helps nobody on the LAN
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 # everything the page needs is served from here, so the policy can stay strict
@@ -120,7 +124,9 @@ async def download_export(
         path.unlink(missing_ok=True)
         raise HTTPException(status_code=404)
 
-    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", name)[:120] or "export.csv"
+    # only the last path part, without leading dots: "../../evil.bat" became ".._.._evil.bat.csv"
+    base = re.split(r"[\\/]", name)[-1].lstrip(".")
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", base)[:120] or "export.csv"
 
     return FileResponse(
         path,
@@ -347,6 +353,10 @@ async def chat(
 
     except BaseExceptionGroup as exc:
 
+        if llm_error := _llm_error_in(exc):
+            print(f"[CHAT LLM ERROR] {llm_error.key}", flush=True)
+            return {"answer": llm_error.text(language), "error_type": "LLMError"}
+
         print(
             "\n[CHAT EXCEPTION GROUP]",
             flush=True,
@@ -381,6 +391,15 @@ async def chat(
                 type(exc).__name__
             ),
         }
+
+def _llm_error_in(group: BaseExceptionGroup) -> LLMError | None:
+    """an LLM failure inside the MCP session arrives wrapped in exception groups; it was reported as "MCP down" """
+    for error in group.exceptions:
+        if isinstance(error, LLMError):
+            return error
+        if isinstance(error, BaseExceptionGroup) and (found := _llm_error_in(error)):
+            return found
+    return None
 
 # =========================================================
 # CHAT (STREAMING)
@@ -418,6 +437,11 @@ async def chat_stream(
             yield _ndjson({"type": "error", "message": exc.text(language)})
 
         except BaseExceptionGroup as exc:
+
+            if llm_error := _llm_error_in(exc):
+                print(f"[CHAT LLM ERROR] {llm_error.key}", flush=True)
+                yield _ndjson({"type": "error", "message": llm_error.text(language)})
+                return
 
             for index, error in enumerate(
                 exc.exceptions,

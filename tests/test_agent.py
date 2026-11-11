@@ -366,9 +366,9 @@ async def test_unsourced_numbers_are_never_shown(monkeypatch):
 
 
 async def test_numbers_from_the_question_are_fine(monkeypatch):
-    llm = FakeLLM([reply("Hapus user 2 tidak bisa: hanya baca.")])
+    llm = FakeLLM([reply("User 2 adalah nomor urut di daftar, bukan data baru.")])
     agent = make_agent(make_config(monkeypatch), llm, FakeSession())
-    assert await agent.ask("hapus user 2") == "Hapus user 2 tidak bisa: hanya baca."
+    assert await agent.ask("apa maksudnya user 2?") == "User 2 adalah nomor urut di daftar, bukan data baru."
     assert len(llm.requests) == 1
 
 
@@ -443,12 +443,12 @@ async def test_refusal_with_numbers_gets_a_clear_retry_message(monkeypatch):
 
 
 async def test_numbers_from_earlier_real_answers_are_allowed(monkeypatch):
-    # a refusal that repeats an id shown earlier must stay a refusal, not become a fetch
-    llm = FakeLLM([reply("Saya tidak dapat menghapus user 100000001: aksesnya hanya baca.")])
+    # an answer that repeats an id shown earlier must stay as it is, not become a fetch
+    llm = FakeLLM([reply("Id 100000001 adalah nomor Rina Sari di KnowBe4.")])
     agent = make_agent(make_config(monkeypatch), llm, FakeSession())
     history = [{"role": "user", "content": "cari rina"}, {"role": "assistant", "content": "1. Rina Sari (id 100000001)"}]
-    answer = await agent.ask("hapus user Rina Sari", history=history)
-    assert answer.startswith("Saya tidak dapat menghapus") and len(llm.requests) == 1
+    answer = await agent.ask("itu id apa ya?", history=history)
+    assert answer.startswith("Id 100000001 adalah") and len(llm.requests) == 1
 
 
 async def test_range_without_a_fetch_gets_the_exact_call(monkeypatch):
@@ -490,8 +490,9 @@ async def test_delete_request_is_not_turned_into_a_summary(monkeypatch):
     session = FakeSession({"find_user": {"match_count": 1, "ask_user": False, "matches": [{"id": 9, "name": "Rina Sari"}]}})
     session.tools.append(SimpleNamespace(name="find_user", description="d", input_schema={"type": "object"}))
     agent = make_agent(make_config(monkeypatch), llm, session)
-    assert await agent.ask("hapus user Rina Sari") == "Saya tidak dapat menghapus user."
-    assert len(llm.requests) == 2
+    # audit 2026-11-12: "hapus semua pengguna" got a users list; a change request now gets the fixed read-only answer
+    assert await agent.ask("hapus user Rina Sari") == msg("read_only", "id")
+    assert llm.requests == [] and session.calls == []
 
 
 async def test_users_table_comes_from_the_data(monkeypatch):
@@ -1894,3 +1895,427 @@ def test_comparative_judgements_go(sentence):
     from agent.agent import _without_opinions
     answer = f"**Ada 110 video.**\n\n**Why**\n- 6 video punya versi Indonesia.\n- {sentence}"
     assert _without_opinions(answer, "{}") == "**Ada 110 video.**\n\n**Why**\n- 6 video punya versi Indonesia."
+
+
+async def test_raw_html_images_the_model_writes_are_removed(monkeypatch):
+    # audit 2026-11-12: a raw <img> showed full width on one phone and as a stray dot elsewhere
+    llm = FakeLLM([
+        reply(calls=[tool_call("a", "get_account", '{"console": "main"}')], finish="tool_calls"),
+        reply('**Tes terakhir: 1 orang klik.**\n\n<img src="/static/favicon.svg" onerror="x()"> <IMG SRC=x.png>\n\nSelesai.'),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, FakeSession()).ask("siapa yang klik tes terakhir")
+    assert "<img" not in answer.lower() and answer.startswith("**Tes terakhir: 1 orang klik.**") and answer.endswith("Selesai.")
+
+
+GROUP_RESULT = {
+    "campaign": {"campaign_id": 1, "name": "Awareness Training ", "start_date": "2026-10-07", "status": "Completed"},
+    "counted_by": "user",
+    "groups": [{"group": "Group-A1", "total": 17, "completed": 9, "in_progress": 0, "not_started": 0, "past_due": 8,
+                "percent_complete": 52.94, "archived_not_counted": 16},
+               {"group": "Group-B1", "total": 6, "completed": 5, "in_progress": 0, "not_started": 0, "past_due": 1, "percent_complete": 83.33}],
+    "totals": {"total": 23, "completed": 14, "in_progress": 0, "not_started": 0, "past_due": 9, "percent_complete": 60.87},
+    "archived_not_counted": 16, "unknown_groups": ["Marketing"],
+}
+GROUP_QUESTION = "tarik data campaign 2026-10-07 untuk group Group-A1, Group-B1 berapa user complete, in progress, past due"
+
+
+def group_session(result=None):
+    session = product_session()
+    session.tools.append(SimpleNamespace(name="training_by_group", description="d", input_schema={"type": "object"}))
+    session.results["training_by_group"] = result or GROUP_RESULT
+    return session
+
+
+@pytest.mark.parametrize("text,day", [
+    ("campaign 2026-10-07 per grup", "2026-10-07"), ("campaign 7 oktober 2026", "2026-10-07"), ("07/10/2026", "2026-10-07"),
+    ("campaign 31 februari 2026", None), ("tahun 2026", None), ("id 12026-10-07x", None),
+])
+def test_one_day_in_the_question(text, day):
+    from agent.agent import _question_date
+    assert _question_date(text) == day
+
+
+async def test_per_group_question_reaches_the_tool_with_the_question_and_its_day(monkeypatch):
+    # live: the model wrote a 21-row table itself and was cut off at the token limit after 206 s
+    session = group_session()
+    llm = FakeLLM([reply("**Tanpa data.**"), reply("**Dari data.**")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask(GROUP_QUESTION)
+    call = next(args for name, args in session.calls if name == "training_by_group")
+    assert call["campaign_date"] == "2026-10-07" and "group-a1" in call["text"]
+    first = answer.splitlines()[0]
+    assert first == "**" + msg("group_training_line", "id", name="Awareness Training", date="2026-10-07", status="Completed",
+                               total=23, unit="orang", groups=2, completed=14, in_progress=0, not_started=0, past_due=9,
+                               percent="60,87", percent_past_due="-") + "**"
+    assert "| Group-A1 | 17 | 9 | 0 | 0 | 8 | 52,94% |" in answer
+    assert "| **Total (tiap orang sekali)** | **23** | **14** | **0** | **0** | **9** | **60,87%** |" in answer
+    assert msg("group_training_archived", "id", count=16) in answer and "Marketing" in answer
+
+
+async def test_the_models_own_table_is_replaced(monkeypatch):
+    session = group_session()
+    llm = FakeLLM([reply(calls=[tool_call("c1", "training_by_group", '{"console": "main", "campaign_date": "2026-10-07"}')], finish="tool_calls"),
+                   reply("**The campaign is done.**\n\n| Group | Done |\n|---|---|\n| Group-A1 | 99 |\n\nGroup-A1 has 8 Past Due.")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask(GROUP_QUESTION.replace("tarik", "get"), "en")
+    assert "| Group-A1 | 99 |" not in answer and "| Group-A1 | 17 | 9 | 0 | 0 | 8 | 52.94% |" in answer
+    assert answer.rstrip().endswith("Group-A1 has 8 Past Due.")
+
+
+async def test_several_campaigns_get_a_numbered_choice(monkeypatch):
+    matches = [{"campaign_id": 1, "name": "Training Q1 ", "start_date": "2026-10-07", "groups": ["A", "B", "C", "D", "E"]},
+               {"campaign_id": 2, "name": "Training Q1 (Language B)", "start_date": "2026-10-07", "groups": ["Group-C1"]}]
+    session = group_session({"console": "main", "ask_user": True, "message": "Several", "matches": matches})
+    llm = FakeLLM([reply(calls=[tool_call("c1", "training_by_group", '{"console": "main"}')], finish="tool_calls"), reply("Which one?")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("status training per grup campaign 7 oktober 2026", "en")
+    assert answer.startswith("**" + msg("campaign_choices", "en") + "**")
+    assert "1. Training Q1 (ID 1, 2026-10-07; A, B, C, D…)" in answer and "2. Training Q1 (Language B) (ID 2, 2026-10-07; Group-C1)" in answer
+
+
+@pytest.mark.parametrize("prompt", ["grup mana yang paling berisiko?", "tren risiko grup IT", "berapa yang lulus modul phishing 101?"])
+async def test_other_group_or_training_questions_are_not_forced(monkeypatch, prompt):
+    session = group_session()
+    llm = FakeLLM([reply("**Tanpa data.**"), reply("**Dari data.**"), reply("**Dari data.**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert "training_by_group" not in [c[0] for c in session.calls]
+
+
+def chart(name, summary, title="Grafik"):
+    return {"chart": name, "title": title, "image_url": "/static/charts/" + "a" * 32 + ".png", "summary": summary}
+
+
+@pytest.mark.parametrize("item,language,expected", [
+    (chart("users_by_level", {"users_per_level": {"Low": 40, "Medium": 15}}), "id", ["| Level | Pengguna |", "| Low | 40 |", "| Medium | 15 |"]),
+    (chart("top_users", {"users": [{"name": "Ana", "risk_score": 54.2, "risk_level": "Critical"}]}), "id", ["| 1 | Ana | 54,2 | Critical |"]),
+    (chart("phishing_tests", {"tests": [{"name": "Old", "started_at": "2026-01-01", "phish_prone_percent": 12.5},
+                                        {"name": "New", "started_at": "2026-10-26", "phish_prone_percent": 25.0}]}), "en",
+     ["| Test | Date | Phish-prone % |", "| New | 2026-10-26 | 25% |\n| Old | 2026-01-01 | 12.5% |"]),
+    (chart("groups", {"groups": [{"name": "IT", "risk_score": 51.1, "risk_level": "High", "active_users": 19}]}), "en", ["| IT | 51.1 | High | 19 |"]),
+    (chart("training_completion", {"campaigns": [{"name": "Q1", "start_date": "2026-01-01", "completion_percentage": 80}]}), "id",
+     ["| Q1 | 2026-01-01 | 80% |"]),
+    (chart("modules", {"modules": [{"module": "Danger Zone", "enrolled": 7, "passed": 6, "in_progress": 0, "not_started": 0,
+                                    "past_due": 1, "completion_percent": 85.71}]}), "id", ["| Danger Zone | 7 | 6 | 0 | 0 | 1 | 85,71% |"]),
+    (chart("reported_emails", {"per_month": {"2026-09": 3}, "by_category": {"threat": 1}, "still_open": 2}), "en",
+     ["| 2026-09 | 3 |", "By category: threat 1. Still open: 2."]),
+    (chart("risk_trend", {"from": "2025-11-01", "to": "2026-11-02", "first_score": 40.1, "last_score": 38.0,
+                          "lowest": {"date": "2026-06-15", "score": 37.5}, "highest": {"date": "2025-12-01", "score": 41.2}}), "id",
+     ["| Awal | 2025-11-01 | 40,1 |", "| Terendah | 2026-06-15 | 37,5 |", "| Tertinggi | 2025-12-01 | 41,2 |", "| Terakhir | 2026-11-02 | 38,0 |"]),
+])
+def test_every_chart_is_also_text(item, language, expected):
+    # in case the image does not load or is hard to read
+    from agent.agent import _chart_text
+    text = _chart_text(item, language)
+    assert text.startswith(f"**{msg('chart_data', language)}: Grafik**")
+    for part in expected:
+        assert part in text
+
+
+def test_long_charts_are_capped_and_empty_ones_add_nothing():
+    from agent.agent import _chart_text
+    many = chart("top_users", {"users": [{"name": f"U{i}", "risk_score": 50.0, "risk_level": "High"} for i in range(15)]})
+    text = _chart_text(many, "en")
+    assert "| 12 | U11 |" in text and "| 13 |" not in text and msg("chart_more", "en", n=3) in text
+    assert _chart_text(chart("groups", {}), "en") == "" and _chart_text(chart("unknown", {"x": 1}), "en") == ""
+    assert "|" not in _chart_text(chart("groups", {"groups": [{"name": "A|B", "risk_score": 1.0, "risk_level": "Low", "active_users": 1}]}), "en").split("\n")[-1].replace("| A/B | 1.0 | Low | 1 |", "")
+
+
+async def test_chart_answers_carry_the_text_under_the_image(monkeypatch):
+    session = FakeSession({"make_chart": chart("users_by_level", {"users_per_level": {"Low": 40}}, "Pengguna per level")})
+    session.tools.append(SimpleNamespace(name="make_chart", description="d", input_schema={"type": "object"}))
+    llm = FakeLLM([reply(calls=[tool_call("c1", "make_chart", '{"console": "main", "chart": "users_by_level"}')], finish="tool_calls"),
+                   reply("**40 pengguna Low.**")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("grafik pengguna per level risiko")
+    image = answer.index("![Pengguna per level](/static/charts/")
+    assert answer.index("**Data grafik: Pengguna per level**") > image and "| Low | 40 |" in answer
+
+
+def test_whole_percentages_have_no_trailing_zero():
+    from agent.agent import _chart_text, _with_group_training_table
+    data = dict(GROUP_RESULT, groups=[dict(GROUP_RESULT["groups"][1], percent_complete=100.0)], totals=dict(GROUP_RESULT["totals"], percent_complete=90.0))
+    table = _with_group_training_table("", data, "id")
+    assert "| 100% |" in table and "**90%**" in table and "100,0" not in table
+    text = _chart_text(chart("training_completion", {"campaigns": [{"name": "Q1", "start_date": "2026-01-01", "completion_percentage": 100.0}]}), "id")
+    assert "| Q1 | 2026-01-01 | 100% |" in text
+
+
+ROWS = [{"group": "Group-E1", "total": 79, "completed": 11, "past_due": 68, "percent_complete": 13.92, "percent_past_due": 86.08},
+        {"group": "Group-G1", "total": 3, "completed": 3, "past_due": 0, "percent_complete": 100.0, "percent_past_due": 0.0},
+        {"group": "Group-F1", "total": 1, "completed": 1, "past_due": 0, "percent_complete": 100.0, "percent_past_due": 0.0}]
+
+
+@pytest.mark.parametrize("sentence,wrong", [
+    ("Group seperti Group-E1 (99% Past Due) memiliki completion rendah.", True),   # live: it is 86,08
+    ("Group-E1 punya 86,08% Past Due dari 79 orang.", False),
+    ("Group-E1 sekitar 86% Past Due.", False),                                      # rounding is fine
+    ("Group-G1 (3 user) dan Group-F1 (1 user) sudah 100% complete.", False),
+    ("Group-G1 (4 user) sudah selesai.", True),
+    ("Tidak ada grup yang disebut di sini, 99%.", False),
+])
+def test_numbers_after_a_group_must_be_that_groups(sentence, wrong):
+    from agent.agent import _wrong_group_numbers
+    assert _wrong_group_numbers(sentence, ROWS) is wrong
+
+
+def test_a_wrong_group_number_drops_only_that_sentence():
+    from agent.agent import _with_group_training_table
+    data = dict(GROUP_RESULT, groups=ROWS, totals=dict(GROUP_RESULT["totals"]))
+    answer = "**x**\n\n**Kenapa**\nGroup-E1 (99% Past Due) rendah. Group-G1 sudah 100% complete."
+    out = _with_group_training_table(answer, data, "id")
+    assert "99%" not in out and "Group-G1 sudah 100% complete." in out and "**Kenapa**" in out
+
+
+@pytest.mark.parametrize("prompt,archived", [
+    (GROUP_QUESTION, False), (GROUP_QUESTION + " termasuk yang diarsipkan", True), ("training per group, include archived", True),
+])
+async def test_archived_people_only_when_the_question_asks(monkeypatch, prompt, archived):
+    session = group_session()
+    llm = FakeLLM([reply(calls=[tool_call("c1", "training_by_group", '{"console": "main", "include_archived": true}')], finish="tool_calls"),
+                   reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    call = next(args for name, args in session.calls if name == "training_by_group")
+    assert call["include_archived"] is archived
+
+
+def test_group_standouts_come_from_code_and_wrong_superlatives_go():
+    # live: "Group-B1 ... terbaik" (Group-G1 is at 100%), "Group-D1 ... past due tertinggi" (Group-E1 is higher), "Group-D1 grup terbesar" (Group-A4 is)
+    from agent.agent import _with_group_training_table
+    rows = [dict(r) for r in ROWS] + [{"group": "Group-D1", "total": 106, "completed": 26, "past_due": 80, "percent_complete": 24.53,
+                                       "percent_past_due": 75.47}]
+    data = dict(GROUP_RESULT, groups=rows, unknown_groups=[], archived_not_counted=0)
+    answer = ("**x**\n\n- Group-B1 dan Group-G1 sudah 100% selesai.\n- Group-D1 punya past due tertinggi (75,47%).\n"
+              "- Group-E1: 11 selesai, 68 past due.\n\nSebagian besar peserta sudah selesai.")
+    out = _with_group_training_table(answer, data, "id")
+    assert msg("group_training_standouts", "id", top="Group-G1, Group-F1", top_pct="100", low="Group-E1", low_pct="13,92",
+               most="Group-D1", most_n=80, big="Group-D1", big_n=106) in out
+    assert "past due tertinggi" not in out and "- Group-E1: 11 selesai, 68 past due." in out
+    assert "Sebagian besar peserta sudah selesai." in out
+
+
+
+@pytest.mark.parametrize("prompt,language", [
+    ("Hapus semua pengguna dari KnowBe4 sekarang juga.", "id"), ("tolong tambahkan grup baru IT", "id"), ("Please delete all users", "en"),
+    ("can you send phishing emails to everyone", "en"),
+])
+async def test_change_requests_get_the_read_only_answer(monkeypatch, prompt, language):
+    llm, session = FakeLLM([]), FakeSession()
+    assert await make_agent(make_config(monkeypatch), llm, session).ask(prompt, language) == msg("read_only", language)
+    assert llm.requests == [] and session.calls == []
+
+
+@pytest.mark.parametrize("prompt", ["berapa yang kirim email ke phisher?", "siapa yang mengubah pengaturan phishing?",
+                                    "which training campaigns auto-enrol new users?", "update data terbaru dong, risk score?"])
+async def test_questions_with_action_words_are_still_answered(monkeypatch, prompt):
+    llm = FakeLLM([reply("**ok**"), reply("**ok**"), reply("**ok**")])
+    answer = await make_agent(make_config(monkeypatch), llm, FakeSession()).ask(prompt)
+    assert answer != msg("read_only", "id") and llm.requests
+
+
+@pytest.mark.parametrize("prompt,unknown", [("Berapa risk score console mars?", "mars"), ("risk score konsol main?", None),
+                                           ("risk score console ini berapa", None)])
+async def test_an_unknown_console_is_named(monkeypatch, prompt, unknown):
+    llm = FakeLLM([reply("**ok**"), reply("**ok**"), reply("**ok**")])
+    answer = await make_agent(make_config(monkeypatch), llm, FakeSession()).ask(prompt)
+    if unknown:
+        assert answer == msg("unknown_console", "id", name=unknown, consoles="Main (main), Off (off)") and llm.requests == []
+    else:
+        assert llm.requests
+
+
+@pytest.mark.parametrize("prompt,name", [("Berapa risk score Zzyzx Qwertyuiop?", "Zzyzx Qwertyuiop"), ("risk score dari Rina Sari", "Rina Sari"),
+                                        ("Berapa risk score Main sekarang?", None), ("risk score IT", None), ("risk score kita", None)])
+def test_a_named_person_is_recognised(monkeypatch, prompt, name):
+    agent = make_agent(make_config(monkeypatch), FakeLLM([]), FakeSession())
+    assert agent._named_person(prompt) == name
+
+
+async def test_a_named_person_is_searched_for(monkeypatch):
+    # live: "risk score Zzyzx Qwertyuiop" was answered as "no console named Zzyzx Qwertyuiop"
+    session = FakeSession({"find_user": {"match_count": 0, "matches": []}})
+    session.tools.append(SimpleNamespace(name="find_user", description="d", input_schema={"type": "object"}))
+    llm = FakeLLM([reply(calls=[tool_call("a", "list_consoles", "{}")], finish="tool_calls"), reply("**Tidak ada konsol itu.**"),
+                   reply("**Tidak ada pengguna bernama Zzyzx Qwertyuiop.**")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("Berapa risk score Zzyzx Qwertyuiop?")
+    assert ("find_user", {"console": "main", "query": "Zzyzx Qwertyuiop"}) in session.calls
+    assert answer == "**Tidak ada pengguna bernama Zzyzx Qwertyuiop.**"
+
+
+BREAKDOWN_TOOLS = ["phishing_by_group", "campaign_people", "group_members", "person_training", "coverage_gaps", "compare_periods"]
+
+
+def breakdown_session(results=None):
+    session = group_session()
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in BREAKDOWN_TOOLS)
+    session.results.update(results or {})
+    return session
+
+
+@pytest.mark.parametrize("prompt,tool", [
+    ("hasil phishing terakhir per grup gimana?", "phishing_by_group"),
+    ("which groups clicked the phishing test the most?", "phishing_by_group"),
+    ("siapa saja yang past due di campaign onboarding?", "campaign_people"),
+    ("who has not started the onboarding campaign?", "campaign_people"),
+    ("siapa saja anggota grup IT?", "group_members"),
+    ("who is in the HR group?", "group_members"),
+    ("siapa yang belum pernah dites phishing?", "coverage_gaps"),
+    ("who has never had any training?", "coverage_gaps"),
+    ("bandingkan phishing kuartal ini dengan kuartal lalu", "compare_periods"),
+    ("training completion this year vs last year", "compare_periods"),
+])
+async def test_breakdown_questions_reach_their_tool(monkeypatch, prompt, tool):
+    session = breakdown_session()
+    llm = FakeLLM([reply("**Tanpa data.**"), reply("**Dari data.**"), reply("**Dari data.**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert tool in [c[0] for c in session.calls]
+
+
+@pytest.mark.parametrize("prompt", ["siapa yang belum pernah login ke knowbe4?", "risk kita naik ga dibanding 90 hari lalu",
+                                    "grup mana yang paling berisiko?", "siapa yang past due training?"])
+async def test_other_questions_keep_their_tools(monkeypatch, prompt):
+    session = breakdown_session()
+    llm = FakeLLM([reply("**Tanpa data.**"), reply("**Dari data.**"), reply("**Dari data.**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert not {c[0] for c in session.calls} & {"phishing_by_group", "campaign_people", "group_members", "coverage_gaps", "compare_periods"}
+
+
+PHISH_GROUPS = {
+    "tests": [{"pst_id": 100, "name": "Invoice test", "started_at": "2026-10-01"}],
+    "groups": [{"group": "IT", "delivered": 2, "failed": 1, "clicked": 1, "entered_data": 0, "opened_attachment": 0, "reported": 1,
+                "failure_percent": 50.0, "report_percent": 50.0},
+               {"group": "HR", "delivered": 4, "failed": 0, "clicked": 0, "entered_data": 0, "opened_attachment": 0, "reported": 3,
+                "failure_percent": 0.0, "report_percent": 75.0}],
+    "totals": {"delivered": 6, "failed": 1}, "unknown_groups": ["Marketing"], "archived_not_counted": 2,
+}
+
+
+async def test_phishing_per_group_table_and_checks(monkeypatch):
+    session = breakdown_session({"phishing_by_group": PHISH_GROUPS})
+    llm = FakeLLM([reply(calls=[tool_call("c1", "phishing_by_group", '{"console": "main", "include_archived": true}')], finish="tool_calls"),
+                   reply("**Tes Invoice: 1 dari 6 gagal.**\n\n| Grup | x |\n|---|---|\n| IT | 99 |\n\n"
+                         "IT paling banyak gagal. HR punya 90% melapor. HR melapor 3 kali.")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("hasil phishing per grup")
+    call = next(args for name, args in session.calls if name == "phishing_by_group")
+    assert call["include_archived"] is False and call["text"] == "hasil phishing per grup"
+    # the first line comes from code: the model once counted groups as failing ("1 grup gagal")
+    assert answer.startswith("**" + msg("phishing_group_line", "id", what='"Invoice test" (2026-10-01)', delivered=6, groups=2,
+                                        failed=1, fpct="-", reported=0, rpct="-", unit="orang") + "**")
+    assert "| IT | 2 | 1 | 1 | 0 | 0 | 1 | 50% | 50% |" in answer and "| IT | 99 |" not in answer
+    assert msg("phishing_group_standouts", "id", top="IT", top_pct="50", rep="HR", rep_pct="75", big="HR", big_n=4) in answer
+    assert "paling banyak" not in answer and "90%" not in answer and "HR melapor 3 kali." in answer
+    assert "Marketing" in answer and msg("group_training_archived", "id", count=2) in answer
+
+
+@pytest.mark.parametrize("tool,result,expected", [
+    ("group_members", {"group": "IT", "members": [{"name": "Ana A", "email": "ana@example.com", "risk_score": 50.0, "risk_level": "High",
+                                                    "phish_prone_percent": 25.0, "past_due_training": 1}], "total": 3},
+     ["| 1 | Ana A | ana@example.com | 50 | High | 25% | 1 |", msg("breakdown_more", "id", n=2)]),
+    ("campaign_people", {"people": [{"name": "Ana A", "email": "ana@example.com", "status": "Past Due",
+                                     "modules": [{"module": "M1", "status": "Passed"}, {"module": "M2", "status": "Past Due"}]}], "total": 1},
+     ["| 1 | Ana A | ana@example.com | Past Due | M1 (Passed); M2 (Past Due) |"]),
+    ("person_training", {"enrolments": [{"campaign": "Onboarding", "module": "M1", "status": "Passed", "enrolled": "2026-09-02",
+                                         "completed": "2026-09-10", "minutes": 10.5}]},
+     ["| Onboarding | M1 | Passed | 2026-09-02 | 2026-09-10 | 10,5 |"]),
+    ("coverage_gaps", {"people_with_neither": [{"name": "Eka E", "email": "eka@example.com", "joined": "2026-06-01"}], "neither": 1},
+     [msg("coverage_neither_heading", "id"), "| 1 | Eka E | eka@example.com | 2026-06-01 |"]),
+    ("compare_periods", {"metric": "phishing", "current": {"period": "2026-07-01 to 2026-09-30", "tests": 1, "delivered": 49,
+                                                           "phish_prone_percent": 14.29, "reported": 10, "report_percent": 20.41},
+                         "earlier": {"period": "2026-03-31 to 2026-06-30", "tests": 2, "delivered": 12, "phish_prone_percent": 0.0,
+                                     "reported": 1, "report_percent": 8.33}},
+     ["| | 2026-07-01 to 2026-09-30 | 2026-03-31 to 2026-06-30 |", "| Phish-prone % | 14,29% | 0% |", "| Tes | 1 | 2 |"]),
+])
+def test_breakdown_tables_are_built_in_code(tool, result, expected):
+    from agent.agent import _with_breakdown_table
+    out = _with_breakdown_table("**Jawaban.**\n\n| a | b |\n|---|---|\n| x | y |\n\nPenjelasan.", tool, result, "id")
+    # the comparison's first line is built in code (test_compare_first_line_comes_from_the_numbers)
+    assert (tool == "compare_periods" or out.startswith("**Jawaban.**")) and "| x | y |" not in out and out.endswith("Penjelasan.")
+    for part in expected:
+        assert part in out
+
+
+async def test_campaign_people_question_gets_its_day_and_choices(monkeypatch):
+    matches = [{"campaign_id": 1, "name": "A", "start_date": "2026-10-07", "groups": []},
+               {"campaign_id": 2, "name": "B", "start_date": "2026-10-07", "groups": []}]
+    session = breakdown_session({"campaign_people": {"ask_user": True, "message": "x", "matches": matches}})
+    llm = FakeLLM([reply(calls=[tool_call("c1", "campaign_people", '{"console": "main", "campaign": "security"}')], finish="tool_calls"),
+                   reply("Yang mana?")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("siapa yang past due di campaign security 7 oktober 2026?")
+    call = next(args for name, args in session.calls if name == "campaign_people")
+    assert call["campaign_date"] == "2026-10-07" and answer.startswith("**" + msg("campaign_choices", "id") + "**")
+
+
+@pytest.mark.parametrize("question,first,second", [
+    ("bandingkan phishing kuartal ini dengan kuartal lalu", {"start_date": "2026-10-01"}, ("2026-07-01", "2026-09-30")),
+    ("training completion this year vs last year", {"start_date": "2026-01-01"}, ("2025-01-01", "2025-12-31")),
+    ("phishing 2026 vs 2025", {"start_date": "2026-01-01"}, ("2025-01-01", "2025-12-31")),
+    ("phishing Q3 2026", {"start_date": "2026-07-01", "end_date": "2026-09-30"}, None),
+])
+def test_both_periods_of_a_comparison(monkeypatch, question, first, second):
+    # live: the model sent 2026-09-01 to today against June-August for "this quarter vs last quarter"
+    from datetime import date as real_date
+
+    import agent.period as period
+
+    class Today(real_date):
+        @classmethod
+        def today(cls):
+            return real_date(2026, 11, 12)
+
+    monkeypatch.setattr(period, "date", Today)
+    from agent.agent import _two_periods
+    a, b = _two_periods(question)
+    assert a.args() == first
+    assert (b.args() == {"start_date": second[0], "end_date": second[1]}) if second else b is None
+
+
+async def test_compare_periods_gets_the_questions_periods(monkeypatch):
+    session = breakdown_session()
+    llm = FakeLLM([reply(calls=[tool_call("c1", "compare_periods", '{"console": "main", "metric": "phishing", "start_date": "2026-09-01", '
+                                                 '"compare_start": "2026-06-01", "compare_end": "2026-08-31"}')], finish="tool_calls"),
+                   reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask("phishing 2026 vs 2025")
+    call = next(args for name, args in session.calls if name == "compare_periods")
+    assert (call.get("start_date"), call.get("compare_start"), call.get("compare_end")) == ("2026-01-01", "2025-01-01", "2025-12-31")
+
+
+def test_groups_counted_as_failing_are_dropped_and_the_first_line_is_code():
+    from agent.agent import _with_breakdown_table
+    data = dict(PHISH_GROUPS, totals={"delivered": 6, "failed": 1, "reported": 4, "failure_percent": 16.67, "report_percent": 66.67})
+    out = _with_breakdown_table("**1 grup gagal.**\n\n- 1 grup gagal dengan tingkat 25%.\n- IT punya 2 email.", "phishing_by_group", data, "id")
+    assert out.startswith("**" + msg("phishing_group_line", "id", what='"Invoice test" (2026-10-01)', delivered=6, groups=2, failed=1,
+                                     fpct="16,67%", reported=4, rpct="66,67%", unit="orang") + "**")
+    assert "grup gagal" not in out and "- IT punya 2 email." in out
+
+
+def test_compare_first_line_comes_from_the_numbers():
+    # live: "peningkatan risiko yang signifikan" and "2 vs 1 tests: fewer"
+    from agent.agent import _with_breakdown_table
+    data = {"metric": "phishing", "change_points": 23.21, "better": False,
+            "current": {"period": "2026-10-01 to 2026-11-12", "phish_prone_percent": 37.5},
+            "earlier": {"period": "2026-07-01 to 2026-09-30", "phish_prone_percent": 14.29}}
+    out = _with_breakdown_table("**Peningkatan risiko yang signifikan.**\n\nPenjelasan.", "compare_periods", data, "id")
+    assert out.startswith("**" + msg("compare_line", "id", label="Phish-prone %", a="37,5%", pa="2026-10-01 to 2026-11-12", b="14,29%",
+                                     pb="2026-07-01 to 2026-09-30", change=msg("compare_worse", "id", points="+23,21")) + "**")
+    assert "signifikan" not in out
+
+
+def test_superlatives_go_even_with_a_misspelt_group_name():
+    # live: Group-S was written "Group S", so a name check let "tertinggi" through
+    from agent.agent import _with_breakdown_table
+    out = _with_breakdown_table("**x**\n\n- **Group S** memiliki tingkat kegagalan tertinggi: 100%.\n- IT punya 2 email.",
+                                "phishing_by_group", PHISH_GROUPS, "id")
+    assert "Group S" not in out and "- IT punya 2 email." in out
+
+
+def test_a_hedged_reason_is_dropped():
+    from agent.agent import _without_made_up_reasons
+    out = _without_made_up_reasons("**x**\n\n- Risiko rendah kemungkinan besar karena belum pernah terpapar.\n- 0 pendaftaran.", '{"x": 0}')
+    assert "kemungkinan" not in out and "- 0 pendaftaran." in out
+
+
+async def test_a_comparison_answer_gets_its_table_and_line(monkeypatch):
+    # live: the comparison was never kept, so its answer had the model's vague line and no table
+    result = {"metric": "phishing", "change_points": 23.21, "better": False,
+              "current": {"period": "2026-10-01 to 2026-11-12", "tests": 2, "delivered": 8, "phish_prone_percent": 37.5, "reported": 3, "report_percent": 37.5},
+              "earlier": {"period": "2026-07-01 to 2026-09-30", "tests": 1, "delivered": 49, "phish_prone_percent": 14.29, "reported": 10, "report_percent": 20.41}}
+    session = breakdown_session({"compare_periods": result})
+    llm = FakeLLM([reply(calls=[tool_call("c1", "compare_periods", '{"console": "main"}')], finish="tool_calls"),
+                   reply("**Peningkatan risiko yang signifikan.**\n\nPenjelasan.")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("bandingkan phishing kuartal ini dengan kuartal lalu")
+    assert answer.startswith("**Phish-prone %: 37,5% pada 2026-10-01 to 2026-11-12") and "| Tes | 2 | 1 |" in answer
