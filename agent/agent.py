@@ -513,27 +513,89 @@ SPECULATIVE = ("wajib", "diwajibkan", "mandatory", "required", "compulsory", "pr
                "motivasi", "motivation", "kesadaran tinggi", "high awareness", "budaya", "culture")
 
 
+def _drop_sentences_where(answer: str, bad: Any) -> str:
+    """drops the sentences `bad` flags; the first line and table rows stay, and so does a bullet's marker.
+    a label left with nothing under it ("**Kenapa**") goes too"""
+    lines = answer.splitlines()
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    out = []
+    dropped = False
+    for i, line in enumerate(lines):
+        if i == first or line.lstrip().startswith("|") or not bad(line):
+            out.append(line)
+            continue
+        bullet = re.match(r"^\s*(?:[-*•]|\d+\.)\s+", line)
+        body = line[bullet.end():] if bullet else line
+        kept = [x for x in re.split(r"(?<=[.!?])\s+", body) if not bad(x)]
+        dropped = True
+        if kept:
+            out.append((bullet.group(0) if bullet else "") + " ".join(kept))
+    if not dropped:
+        return answer
+
+    def heading(line: str) -> bool:
+        return bool(LABEL_ONLY.match(line) or re.fullmatch(r"\s*\*\*[^*\n]{1,40}\*\*\s*", line))
+
+    def emptied(j: int) -> bool:
+        after = next((x for x in out[j + 1:] if x.strip()), None)
+        return after is None or heading(after)
+
+    kept_lines = [ln for j, ln in enumerate(out) if j == first or not (heading(ln) and emptied(j))]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept_lines)).strip()
+
+
 def _without_made_up_reasons(answer: str, sources: str) -> str:
     """a "why" with a cause the data cannot give ("tinggi karena status wajib"): that sentence goes.
-    the first line and table rows stay; the number check cannot see this, it is words"""
+    the number check cannot see this, it is words"""
     known = sources.casefold()
     absent = [w for w in SPECULATIVE if not re.search(rf"\b{re.escape(w)}", known)]
     if not absent:
         return answer
     made_up = re.compile(r"\b(?:" + "|".join(re.escape(w) for w in absent) + r")\w*", re.I)
-    lines = answer.splitlines()
-    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
-    out = []
-    for i, line in enumerate(lines):
-        if i == first or line.lstrip().startswith("|") or not (CAUSE.search(line) and made_up.search(line)):
-            out.append(line)
-            continue
-        bullet = re.match(r"^\s*(?:[-*•]|\d+\.)\s+", line)
-        body = line[bullet.end():] if bullet else line
-        kept = [x for x in re.split(r"(?<=[.!?])\s+", body) if not (CAUSE.search(x) and made_up.search(x))]
-        if kept:
-            out.append((bullet.group(0) if bullet else "") + " ".join(kept))
-    return "\n".join(out)
+    return _drop_sentences_where(answer, lambda x: bool(CAUSE.search(x) and made_up.search(x)))
+
+
+# judgements the data cannot hold ("Gaya Animated dan Humorous cocok untuk engagement awareness"); NO_ADVICE in every
+# tool note was not enough. one concept per row, indonesian and english: when a tool result has either wording (a NIST
+# passage saying "effective"), the indonesian "efektif" in the answer is allowed too
+OPINION = (
+    # suits / fits
+    (r"cocok (?:untuk|bagi|dengan)", r"tepat (?:untuk|bagi)", r"(?:sangat |lebih |paling )?ideal (?:untuk|bagi)",
+     r"suit(?:s|ed|able)?", r"well[- ]suited", r"ideal (?:for|choice)", r"perfect (?:for|choice)", r"(?:a )?(?:good|great|perfect) fit"),
+    # effective
+    (r"(?:sangat |lebih |paling |kurang )?efektif", r"(?:highly |more |most |very |less )?effective"),
+    # attractive (bare "menarik" also means "to pull": "menarik data")
+    (r"(?:lebih|sangat|paling|cukup) menarik", r"menarik (?:perhatian|minat|bagi|untuk)", r"engaging", r"appeal(?:s|ing)? to",
+     r"attractive", r"(?:very |more )?interesting"),
+    # engagement
+    (r"keterlibatan", r"(?:meningkatkan|mendorong|membangun) (?:engagement|minat|antusiasme|kesadaran)", r"engagement"),
+    # easy, memorable
+    (r"mudah (?:dipahami|diingat|dicerna|diikuti)", r"easy to (?:understand|follow|remember|digest)", r"memorable"),
+    # liked
+    (r"disukai", r"popular (?:with|among)", r"well[- ]liked"),
+    # a good choice
+    (r"pilihan (?:yang )?(?:tepat|bagus|baik|terbaik)", r"direkomendasikan (?:karena|untuk)",
+     r"(?:a|the) (?:good|great|best|smart|right) (?:choice|option)", r"great (?:for|choice|way)"),
+    # useful
+    (r"sangat (?:bagus|baik|bermanfaat|berguna|membantu)", r"(?:very |highly |really )?(?:useful|helpful|valuable)"),
+    # better than the others ("AJ's Security Bites offers more targeted content")
+    (r"lebih (?:terarah|terfokus|fokus|spesifik|praktis|relevan|lengkap|komprehensif|mendalam|bagus|baik)",
+     r"more (?:targeted|focused|specific|practical|relevant|comprehensive|in-depth|thorough)", r"better (?:suited|for|choice)"),
+)
+
+
+TITLE_NAME = re.compile(r"\"[^\"\n]*\"|“[^”\n]*”|\b[A-Z][\w'-]*(?::?\s+(?:[A-Z][\w'-]*|of|the|and|for|to|in|a|an|&))*:?\s+[A-Z][\w'-]*")
+
+
+def _without_opinions(answer: str, sources: str) -> str:
+    """judgement sentences the data does not support go; the first line and table rows stay"""
+    known = sources.casefold()
+    absent = [p for concept in OPINION if not any(re.search(rf"\b{p}\b", known) for p in concept) for p in concept]
+    if not absent:
+        return answer
+    opinion = re.compile(r"\b(?:" + "|".join(absent) + r")\b", re.I)
+    # titles are names, not judgements: "Respectful Workplace: Effective Communication" is a module
+    return _drop_sentences_where(answer, lambda x: bool(opinion.search(TITLE_NAME.sub(" ", x))))
 
 
 def _drop_sentences_with(answer: str, numbers: list[str]) -> str:
@@ -660,9 +722,10 @@ TOPIC_TOOLS = (
                 r"[^.?!]{0,40}\b(?:modul\w*|modules?|konten|content|materi|video\w*|courses?|kursus)\b"
                 r"|\b(?:modul\w*|modules?|konten|content|materi|courses?|kursus)\b[^.?!]{0,40}"
                 r"\b(?:apa saja|tersedia|available|yang (?:kita |kami )?punya|we have|purchased|dibeli)\b", re.I),
-     "training_library", {"training_library", "training_by_module"}),
+     # the modstore catalogue answers a modstore question; forcing the library after it only added a call
+     "training_library", {"training_library", "training_by_module", "modstore_content"}),
     (re.compile(r"\b(?:modul\w*|modules?|materi\w*|kursus|courses?|video\w*)\b", re.I),
-     "training_by_module", {"training_by_module"}),
+     "training_by_module", {"training_by_module", "modstore_content"}),
     (re.compile(r"\b(?:log ?in\w*|sign(?:ed)? ?in\w*|masuk ke knowbe4|belum pernah masuk)\b", re.I),
      "sign_in_activity", {"sign_in_activity"}),
     (re.compile(r"\b(?:karyawan|pegawai|pengguna|users?|staf|orang)\s+baru\b|\bnew\s+(?:joiners?|hires?|employees?|users?|staff|starters?)\b"
@@ -744,6 +807,14 @@ GUIDANCE_ASK = re.compile(
 )
 AWARENESS_TOPIC = re.compile(
     r"\b(training|pelatihan|awareness|kesadaran|phishing|simulasi|simulation|program|karyawan|employees?|staff|keamanan|security|risiko|risk|klik|click)\w*",
+    re.I,
+)
+# "which ModStore videos would you recommend for new staff?" asks for content, not guidance: it got NIST passages
+CONTENT_PICK = re.compile(
+    r"\b(?:rekomendasi\w*|recommend\w*|sarankan|suggest\w*|pilih\w*|which|mana)\b[^.?!]{0,50}"
+    r"\b(?:video\w*|modul\w*|modules?|konten|content|courses?|kursus|materi|templat\w*|templates?)\b"
+    r"|\b(?:video\w*|modul\w*|modules?|konten|content|courses?|kursus|materi|templat\w*|templates?)\b[^.?!]{0,50}"
+    r"\b(?:rekomendasi\w*|recommend\w*|sarankan|suggest\w*)\b",
     re.I,
 )
 # "apa saja yang bisa kamu lakukan?" / "what can you do?": the whole question, so "apa yang bisa kamu lakukan untuk
@@ -1263,7 +1334,9 @@ class Agent:
                                 call = ("make_chart", {"console": console, "chart": "risk_trend", "user_id": person})
                         elif EXPORT_ASK.search(prompt) and not state.get("export_csv"):
                             exact = msg("call_export", language)
-                        elif (NIST_ASK.search(prompt) or (GUIDANCE_ASK.search(prompt) and AWARENESS_TOPIC.search(prompt))) and not state.get("search_nist"):
+                        elif (NIST_ASK.search(prompt) or (GUIDANCE_ASK.search(prompt) and AWARENESS_TOPIC.search(prompt)
+                                                          and not CONTENT_PICK.search(prompt) and not MODSTORE_ASK.search(prompt))) \
+                                and not state.get("search_nist"):
                             # it answered a phish scale question from general knowledge, with no source
                             exact = msg("call_nist", language)
                         elif (REPORT_ASK.search(prompt) and not state.get("phishing_test_detail") and not PHISHER_ASK.search(prompt)
@@ -1395,7 +1468,7 @@ class Agent:
                         answer = _with_library_order(answer, state["libraries"][0])
                     if state.get("data_tools"):
                         tool_text = " ".join(str(m.get("content") or "") for m in messages if m.get("role") == "tool")
-                        answer = _without_made_up_reasons(answer, f"{prompt} {tool_text}")
+                        answer = _without_opinions(_without_made_up_reasons(answer, f"{prompt} {tool_text}"), f"{prompt} {tool_text}")
                     answer = _fix_levels(answer)
                     if language == "id":
                         answer = _fix_typos_in_answer(answer)

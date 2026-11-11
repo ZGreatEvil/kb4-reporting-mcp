@@ -1792,3 +1792,105 @@ async def test_last_run_questions_use_the_campaign_settings(monkeypatch, prompt)
                    reply("**Terakhir Juli 2024.**"), reply("**Dari pengaturan kampanye.**")])
     await make_agent(product_config(monkeypatch, ksat="t"), llm, session).ask(prompt)
     assert "campaign_settings" in [c[0] for c in session.calls]
+
+
+LIVE_OPINION = ("**Dari katalog ModStore, ada 6 video yang belum dimiliki akun.**\n\n**Fakta utama**\n- 6 video seri Whoopsie\n"
+                "- Semua bergaya Animated dan Humorous\n\n**Kenapa**\n- Gaya Animated dan Humorous cocok untuk engagement awareness\n"
+                "- Bahasa Indonesia tersedia untuk semua 6 video\n- Belum ada di library akun")
+
+
+def test_opinions_the_data_does_not_hold_are_dropped():
+    # live: "Gaya Animated dan Humorous cocok untuk engagement awareness" in a ModStore answer
+    from agent.agent import _without_opinions
+    data = '{"items": [{"title": "Whoopsie", "style": ["Animated", "Humorous"], "indonesian": true}]}'
+    fixed = _without_opinions(LIVE_OPINION, data)
+    assert "cocok" not in fixed and "engagement" not in fixed
+    assert "- Bahasa Indonesia tersedia untuk semua 6 video" in fixed and "**Kenapa**" in fixed
+    assert fixed.startswith("**Dari katalog ModStore, ada 6 video yang belum dimiliki akun.**")
+
+
+@pytest.mark.parametrize("sentence", [
+    "Video ini sangat efektif untuk karyawan baru.", "Materinya lebih menarik dan mudah dipahami.",
+    "This is a great choice for new starters.", "The style is engaging and memorable.", "These videos suit a young audience.",
+    "Ini pilihan yang tepat untuk tim IT.",
+])
+def test_each_kind_of_judgement_goes(sentence):
+    from agent.agent import _without_opinions
+    answer = f"**Ada 6 video.**\n\n- 6 video baru. {sentence}\n- 3 sudah ditugaskan."
+    assert _without_opinions(answer, "{}") == "**Ada 6 video.**\n\n- 6 video baru.\n- 3 sudah ditugaskan."
+
+
+@pytest.mark.parametrize("answer", [
+    "**Ada 6 video.**\n\n- KnowBe4 menarik 2 modul (retired).\n- Data ditarik dari KnowBe4.",   # "menarik" = to pull
+    "**Ada 6 video.**\n\n- 14 konten belum pernah ditugaskan.\n- Rata-rata durasi 5 menit.",
+    "**Video ini cocok untuk tim IT.**\n\n- 6 video.",                                           # the first line stays
+    "**Ada 6 video.**\n\n| Nama | Catatan |\n|---|---|\n| A | very engaging |",                    # table rows stay
+])
+def test_facts_are_left_alone(answer):
+    from agent.agent import _without_opinions
+    assert _without_opinions(answer, "{}") == answer
+
+
+def test_wording_in_the_data_is_allowed():
+    # a KnowBe4 description or NIST passage that itself says "effective" or "engaging"
+    from agent.agent import _without_opinions
+    answer = "**Pedoman NIST.**\n\n- Pelatihan yang engaging lebih efektif."
+    assert _without_opinions(answer, "training should be engaging and is more effective when") == answer
+
+
+def test_a_section_left_empty_loses_its_heading():
+    from agent.agent import _without_opinions
+    answer = "**Ada 6 video.**\n\n**Fakta utama**\n- 6 video.\n\n**Kenapa**\n- Videonya sangat menarik.\n- Gayanya cocok untuk semua."
+    assert _without_opinions(answer, "{}") == "**Ada 6 video.**\n\n**Fakta utama**\n- 6 video."
+
+
+async def test_opinions_are_dropped_in_a_real_answer(monkeypatch):
+    session = product_session()
+    session.results["modstore_content"] = {"headline": "h", "items": [{"title": "Whoopsie", "style": ["Animated"]}]}
+    llm = FakeLLM([reply(calls=[tool_call("c1", "modstore_content", '{"console": "main"}')], finish="tool_calls"),
+                   reply("**Ada video Whoopsie.**\n\n- Gaya Animated.\n- Gaya ini cocok untuk engagement.")])
+    answer = await make_agent(product_config(monkeypatch, coach="t"), llm, session).ask("video modstore apa yang bagus?")
+    assert "cocok" not in answer and "- Gaya Animated." in answer
+
+
+async def test_a_modstore_answer_is_not_forced_to_the_library_or_modules(monkeypatch):
+    session = product_session()
+    llm = FakeLLM([reply(calls=[tool_call("c1", "modstore_content", '{"console": "main"}')], finish="tool_calls"),
+                   reply("**Ada video baru di ModStore.**")])
+    await make_agent(product_config(monkeypatch, coach="t"), llm, session).ask("rekomendasikan video modstore yang belum kita punya")
+    assert [c[0] for c in session.calls if c[0] != "make_chart"] == ["modstore_content"]
+
+
+@pytest.mark.parametrize("answer", [
+    "**Modul terbaik.**\n\n- **Respectful Workplace: Effective Communication**: 85,71% (6 dari 7 lulus)",
+    "**Modul terbaik.**\n\n- \"Engaging Your Team\" punya 3 peserta.",
+])
+def test_titles_with_judgement_words_are_names(answer):
+    # found in earlier live answers: a module title holding "Effective"
+    from agent.agent import _without_opinions
+    assert _without_opinions(answer, "") == answer
+
+
+@pytest.mark.parametrize("prompt,nist", [
+    ("which ModStore videos would you recommend for new staff?", False),
+    ("rekomendasikan modul pelatihan untuk karyawan baru", False),
+    ("bagaimana cara meningkatkan efektivitas training awareness?", True),
+    ("how should we run phishing simulations for staff?", True),
+])
+async def test_content_picks_are_not_guidance_questions(monkeypatch, prompt, nist):
+    session = product_session()
+    session.tools.append(SimpleNamespace(name="search_nist", description="d", input_schema={"type": "object"}))
+    llm = FakeLLM([reply("**Tanpa data.**"), reply("**Dari data.**"), reply("**Dari data.**")])
+    await make_agent(product_config(monkeypatch, coach="t", ksat="t"), llm, session).ask(prompt)
+    # the nudge is a message asking the model to search NIST
+    nudged = any(m.get("content") == msg("call_nist", "id") for r in llm.requests for m in r["messages"])
+    assert nudged is nist
+
+
+@pytest.mark.parametrize("sentence", ["The AJ's Security Bites series offers more targeted content on specific security topics.",
+                                      "Seri ini lebih praktis untuk karyawan baru."])
+def test_comparative_judgements_go(sentence):
+    # live, english ModStore answer
+    from agent.agent import _without_opinions
+    answer = f"**Ada 110 video.**\n\n**Why**\n- 6 video punya versi Indonesia.\n- {sentence}"
+    assert _without_opinions(answer, "{}") == "**Ada 110 video.**\n\n**Why**\n- 6 video punya versi Indonesia."

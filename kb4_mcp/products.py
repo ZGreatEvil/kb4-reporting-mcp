@@ -557,8 +557,15 @@ async def modstore_content(
         })
     types = Counter(str(i["type"] or "?") for i in items)
     picked = items
+    search_note = None
     if search and search.strip():
-        picked = [i for i in picked if _words_match(i["title"], search)]
+        found = [i for i in picked if _words_match(i["title"], search)]
+        if found:
+            picked = found
+        else:
+            # the model searched titles for "new" (for "new staff") and got nothing to recommend from
+            search_note = f"No title contains '{search.strip()}', so the search was left out; the other filters still apply."
+            search = None
     if content_type and content_type.strip():
         picked = [i for i in picked if _words_match(i["type"], content_type)]
     if style and style.strip():
@@ -568,20 +575,24 @@ async def modstore_content(
         picked = [i for i in picked if any(c == code or c.startswith(code + "-") for c in i["_langs"])]
     filters = ", ".join(f"{k} '{v}'" for k, v in (("search", search), ("type", content_type), ("style", style), ("language", language)) if v and str(v).strip())
     have = sum(1 for i in picked if i["in_library"])
-    # not in the library first: those are the new options
-    picked = sorted(picked, key=lambda i: (i["in_library"], str(i["title"] or "")))
+    # counted over every match, not the rows shown: from 20 rows the model once said "none have Indonesian versions" (316 do)
+    indonesian = sum(1 for i in picked if i["indonesian"])
+    # not in the library first, then those with an indonesian version: the likeliest new options
+    picked = sorted(picked, key=lambda i: (i["in_library"], not i["indonesian"], str(i["title"] or "")))
     return {
         "console": console,
         "headline": (
             f"The ModStore media catalogue has {len(items)} items ({', '.join(f'{n} {t}' for t, n in types.most_common())})"
             + (f"; {len(picked)} match {filters}" if filters else "")
             + f"; {have} of {'those' if filters else 'them'} are already in the account's library and "
-            f"{len(picked) - have} are not. " + MODSTORE_NOT_LISTED
+            f"{len(picked) - have} are not; {indonesian} have an Indonesian version. " + MODSTORE_NOT_LISTED
             if items else "The ModStore media catalogue returned no items. " + MODSTORE_NOT_LISTED
         ),
         "catalogue_total": len(items),
         "by_type": dict(types),
         "matching": len(picked),
+        "with_indonesian_version": indonesian,
+        "search_note": search_note,
         "already_in_library": have,
         "items": [{k: v for k, v in i.items() if k != "_langs"} for i in picked[: _limit(limit, 15)]],
         "meaning": ("ModStore is KnowBe4's content store; this list is its media catalogue (Real-Time Coaching): videos and "

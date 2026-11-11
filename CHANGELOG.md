@@ -66,6 +66,11 @@ All notable changes to this project are listed here. Dates are in YYYY-MM-DD for
 - The "Pertanyaan berikutnya / Next question" suggestion at the end of answers is gone.
 
 ### Fixed
+- "Which ModStore videos would you recommend for new staff?" was answered with NIST passages: asking to recommend videos, modules, content or templates, or anything about ModStore, no longer triggers the NIST guidance nudge ("how do we make training more effective" still does).
+- `modstore_content`: a title search that matches nothing (the model searched for "new") is left out with a note instead of returning an empty list, and the headline counts Indonesian versions over every match (from 20 rows the model once said there were none; 316 items have one). Items with an Indonesian version come first.
+- Comparative judgements ("more targeted", "lebih praktis") are removed like other judgements.
+- Judgements the data cannot hold ("Animated and Humorous suit awareness engagement", "sangat efektif", "lebih menarik") are removed from answers. Each judgement is checked as a concept in both languages, so wording found in a tool result (a NIST passage saying "effective") stays; titles and quoted names ("Respectful Workplace: Effective Communication") are never read as judgements; a section left empty loses its heading.
+- A ModStore question answered from the ModStore catalogue no longer forces a library or module-progress call as well.
 - A "why" sentence that gives a cause the data cannot hold ("high completion because the module is mandatory") is removed; the word is allowed when a tool result or the question contains it (a module titled "Mandatory ...").
 - On ModStore questions the model's own catalogue remarks are removed before the fixed line is added (it once advised contacting a team for full ModStore access, which is made up).
 - A table of library items could be out of order under a "sorted by publish date" heading (a 2023 item on top); rows that are all library items now follow the tool's order.

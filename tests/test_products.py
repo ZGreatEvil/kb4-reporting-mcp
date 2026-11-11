@@ -543,3 +543,21 @@ async def test_phishing_campaigns_shown_newest_run_first():
     r = await products.campaign_settings(FakeKB({"PhishingSetup": {"phishingCampaigns": {"pagination": {"pages": 1}, "nodes": nodes}}}), "main", limit=2)
     assert [c["name"] for c in r["campaigns"]] == ["recent", "old 5"]
     assert r["headline"].endswith("none scheduled to run again; last run 2026-10-26 (recent).")
+
+
+async def test_a_search_that_matches_no_title_is_left_out():
+    # live: "recommend for new staff" became search="new", which matched nothing to recommend from
+    r = await products.modstore_content(StoreKB({"ModStore": MODSTORE}), "main", search="new", content_type="video")
+    assert [i["title"] for i in r["items"]] == ["Phishing Basics Video", "Think Before You Click"]
+    assert r["search_note"].startswith("No title contains 'new'") and "match type 'video'" in r["headline"]
+    found = await products.modstore_content(StoreKB({"ModStore": MODSTORE}), "main", search="hang")
+    assert found["search_note"] is None and [i["title"] for i in found["items"]] == ["Hang Up"]
+
+
+async def test_modstore_counts_indonesian_versions_over_every_match():
+    nodes = [{"id": str(i), "title": f"Video {i:02}", "contentType": {"name": "Video Module"},
+              "translations": [{"language": {"code": "id" if i % 2 else "en-us"}}]} for i in range(30)]
+    r = await products.modstore_content(StoreKB({"ModStore": {"securityCoachContent": {"nodes": nodes}}}), "main", limit=5)
+    assert r["with_indonesian_version"] == 15 and "15 have an Indonesian version" in r["headline"]
+    # not in the library and with an indonesian version first
+    assert all(i["indonesian"] for i in r["items"])
