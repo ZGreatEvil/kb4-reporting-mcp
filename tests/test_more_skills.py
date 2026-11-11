@@ -301,3 +301,14 @@ async def test_library_newest_and_period():
 ])
 def test_name_matching_uses_word_starts_and_whole_numbers(query, name, hit):
     assert summaries._words_match(name, query) is hit
+
+
+async def test_library_says_it_is_not_the_whole_modstore():
+    r = await summaries.training_library(FakeKB(), "main")
+    assert r["headline"].endswith(summaries.LIBRARY_SCOPE) and "not the whole ModStore catalogue" in r["note"]
+
+
+async def test_library_counts_for_the_first_line():
+    r = await summaries.training_library(FakeKB(), "main")
+    assert r["counts"] == {"total": 4, "retired": 1, "never_assigned": 1, "published": None, "added": None,
+                           "start_date": None, "end_date": None, "content_type": None}

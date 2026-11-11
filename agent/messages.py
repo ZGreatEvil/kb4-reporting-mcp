@@ -119,6 +119,18 @@ MESSAGES: dict[str, dict[str, str]] = {
         "id": "Data sudah diambil ulang dari KnowBe4 {seconds} detik yang lalu, jadi masih terbaru.",
         "en": "Data was refetched from KnowBe4 {seconds} seconds ago, so it is still current.",
     },
+    "library_line": {
+        "id": "Pustaka akun berisi {total} konten ({retired} sudah retired); {never} belum pernah ditugaskan ke siapa pun.",
+        "en": "The account's library has {total} content items ({retired} retired); {never} have never been assigned to anyone.",
+    },
+    "library_line_period": {
+        "id": "Dari {period}: {total} konten baru ({published} diterbitkan KnowBe4, {added} ditambahkan ke akun); {never} belum pernah ditugaskan ke siapa pun.",
+        "en": "From {period}: {total} content items are new ({published} published by KnowBe4, {added} added to the account); {never} have never been assigned to anyone.",
+    },
+    "modstore_scope": {
+        "id": "API KnowBe4 hanya menampilkan konten yang sudah ditambahkan ke akun ini, bukan seluruh katalog ModStore. Untuk melihat semua konten yang bisa ditambahkan, buka Training → ModStore di console.",
+        "en": "KnowBe4's API only shows the content already added to this account, not the whole ModStore catalogue. To browse everything you can add, open Training → ModStore in the console.",
+    },
     "call_topic": {
         "id": "Pertanyaan ini dijawab oleh {tool}. Panggil {tool} sekarang, lalu jawab hanya dari hasilnya.",
         "en": "This question is answered by {tool}. Call {tool} now, then answer only from its result.",

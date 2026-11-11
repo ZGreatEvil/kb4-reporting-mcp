@@ -87,6 +87,7 @@ Rules:
     from the module's name when the question names one. Progress (watched, passed, finished, not started, overdue,
     time spent; "terbaik" = sort most_completed) is always training_by_module. For which content the company has, the newest
     ("terbaru": sort newest) or what to recommend, call training_library; recommend only from its facts (new or never assigned).
+    training_library is the account's own library, not the whole ModStore catalogue; never present it as ModStore-wide.
     Training campaigns are not modules; never answer a module question from training_completion_summary.
 22. Benchmark or industry comparisons: call industry_benchmark when it is available (KnowBe4's official figures per
     industry and company size). Emails employees reported as suspicious in real life are reported_emails (PhishER);
@@ -120,6 +121,11 @@ Definitions (KnowBe4):
 # gives a bare score (the model once answered "risk score?" with it instead of account_risk_overview)
 HIDDEN_TOOLS = {"knowbe4_raw_get", "knowbe4_health_check", "refresh_data"}
 # the user explicitly wants fresh data, not the 10-minute copy; "tes phishing terbaru" (the latest test) is not this
+# the api only lists what the account has added, so these questions get a line saying the catalogue itself is not visible
+MODSTORE_ASK = re.compile(
+    r"\bmod ?store\b|\b(?:knowbe4|kb4) store\b|\btoko knowbe4\b"
+    r"|\bkatalog\w* (?:knowbe4|kb4|konten|modul\w*|training|pelatihan|materi)\b"
+    r"|\b(?:knowbe4|kb4|content|training|module) catalog(?:ue)?s?\b", re.I)
 FRESH_ASK = re.compile(
     r"\b(?:refresh\w*|reload\w*|re-?fetch\w*|perbarui\w*|segarkan|muat ulang|ambil ulang|tarik ulang|update (?:the )?data"
     r"|data (?:yang )?(?:terbaru|terkini|paling baru|fresh|baru)|(?:fresh|new|latest|live|up[- ]to[- ]date) data"
@@ -406,6 +412,95 @@ def _ungrounded_numbers(answer: str, grounded: list[float]) -> list[str]:
     return list(dict.fromkeys(t for t in NUMBER_TOKEN.findall(answer) if not supported(t)))
 
 
+NEW_WORD = re.compile(r"\b(?:baru|terbaru|new|newest|latest|recent\w*|added|ditambahkan|tambahan)\b", re.I)
+ASSIGN_WORD = re.compile(r"\b(?:\w*assign\w*|ditugaskan|diberikan|dienroll\w*|enrol\w*|belum pernah|never)\b", re.I)
+
+
+def _with_library_line(answer: str, library: dict[str, Any], language: str) -> str:
+    """the library answer's first line, from the counts: the model once called the never-assigned count "new".
+    a sentence that still puts that count next to "new" (and not "assigned") is dropped"""
+    counts = library.get("counts") or {}
+    if not counts.get("total") or counts.get("content_type"):
+        return answer
+    lines = answer.splitlines()
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    if first is None or not lines[first].lstrip().startswith("**"):
+        return answer
+    never = counts["never_assigned"]
+    if counts.get("start_date") or counts.get("end_date"):
+        period = (f"{counts.get('start_date') or msg('period_data_start', language)} – "
+                  f"{counts.get('end_date') or msg('period_today', language)}")
+        line = msg("library_line_period", language, period=period, total=counts["total"], published=counts["published"],
+                   added=counts["added"], never=never)
+    else:
+        line = msg("library_line", language, total=counts["total"], retired=counts["retired"], never=never)
+    lines[first] = f"**{line}**"
+    # the same number may honestly be "new" too; then the pairing proves nothing
+    if never and never not in (counts.get("total"), counts.get("published"), counts.get("added")):
+        count = re.compile(rf"(?<![\d.,]){never}(?![\d.,]\d)")
+        for i in range(first + 1, len(lines)):
+            sentences = re.split(r"(?<=[.!?])\s+", lines[i])
+            kept = [s for s in sentences if not (count.search(s) and NEW_WORD.search(s) and not ASSIGN_WORD.search(s))]
+            lines[i] = " ".join(kept) if kept else None
+    return "\n".join(ln for ln in lines if ln is not None).strip()
+
+
+def _cell_name(row: str) -> str:
+    return re.sub(r"[*\"“”`]", "", row.strip().strip("|").split("|")[0]).strip().casefold()
+
+
+def _with_library_order(answer: str, library: dict[str, Any]) -> str:
+    """table rows of library items in the tool's order: the model once listed a 2023 item first under
+    "sorted by publish date". only a table whose every row is a library item is touched"""
+    order = {str(item.get("name") or "").strip().casefold(): i for i, item in enumerate(library.get("items") or [])}
+    if not order:
+        return answer
+    lines = answer.splitlines()
+    i = 0
+    while i < len(lines):
+        if not lines[i].lstrip().startswith("|"):
+            i += 1
+            continue
+        end = i
+        while end < len(lines) and lines[end].lstrip().startswith("|"):
+            end += 1
+        # header and separator stay on top
+        rows = [ln for ln in lines[i + 2:end] if not re.fullmatch(r"\s*\|[\s:|-]*\|?\s*", ln)]
+        if len(rows) > 1 and len(rows) == end - i - 2 and all(_cell_name(r) in order for r in rows):
+            lines[i + 2:end] = sorted(rows, key=lambda r: order[_cell_name(r)])
+        i = end
+    return "\n".join(lines)
+
+
+CATALOGUE_WORD = re.compile(r"\b(?:mod ?store|katalog\w*|catalog(?:ue)?s?)\b", re.I)
+LABEL_ONLY = re.compile(r"^\s*(?:[-*•]\s*)?\**[^.!?\n]{0,30}:\**\s*$")
+
+
+def _without_catalogue_notes(answer: str) -> str:
+    """the model's own modstore remarks go when the fixed line is added: it once said to "contact the team for full
+    access to the ModStore catalogue". the first line stays"""
+    lines = answer.splitlines()
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    out = []
+    for i, line in enumerate(lines):
+        if i == first or line.lstrip().startswith("|") or not CATALOGUE_WORD.search(line):
+            out.append(line)
+            continue
+        bullet = re.match(r"^\s*(?:[-*•]|\d+\.)\s+", line)
+        body = line[bullet.end():] if bullet else line
+        kept = [x for x in re.split(r"(?<=[.!?])\s+", body) if not CATALOGUE_WORD.search(x)]
+        rest = " ".join(kept).strip()
+        if rest and not LABEL_ONLY.match(rest):
+            out.append((bullet.group(0) if bullet else "") + rest)
+    # a label left with nothing under it ("**Catatan:**"): the next non-empty line is another label, or none
+    def emptied(j: int) -> bool:
+        after = next((x for x in out[j + 1:] if x.strip()), None)
+        return after is None or bool(LABEL_ONLY.match(after))
+
+    cleaned = [ln for j, ln in enumerate(out) if not (LABEL_ONLY.match(ln) and emptied(j))]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned)).strip()
+
+
 def _drop_sentences_with(answer: str, numbers: list[str]) -> str:
     """last resort: remove every sentence that still carries a number the data does not contain"""
     bad = re.compile(r"(?<![A-Za-z\d.,])(" + "|".join(re.escape(n) for n in numbers) + r")(?![\d])")
@@ -427,15 +522,40 @@ LANGUAGE_WORDS = {
 }
 
 
+# where english titles sit in an indonesian answer: quotes, table rows, the text after a bullet's label
+TITLE_TEXT = re.compile(r"\"[^\"\n]*\"|“[^”\n]*”|^\s*\|.*$|^(\s*(?:[-*•]|\d+\.)\s+[^:\n]{0,60}:)[^\n]*", re.M)
+
+
 def _wrong_language(answer: str, language: str) -> bool:
-    """after an english turn the model sometimes answers an indonesian question in english (and the other way round)"""
-    words = re.findall(r"[a-z]+", answer.lower())
+    """after an english turn the model sometimes answers an indonesian question in english (and the other way round).
+    titles are left out: a list of module names ("The Inside Man", "Security Awareness ...") read as english"""
+    words = re.findall(r"[a-z]+", TITLE_TEXT.sub(lambda m: m.group(1) or " ", answer).lower())
     if len(words) < 8 or language not in LANGUAGE_WORDS:
         return False
     other = "en" if language == "id" else "id"
     own_hits = sum(w in LANGUAGE_WORDS[language] for w in words)
     other_hits = sum(w in LANGUAGE_WORDS[other] for w in words)
     return (other_hits >= 3 and other_hits > 2 * own_hits) or (other_hits >= 2 and own_hits == 0)
+
+
+# the reply to our rewrite request can be about the request ("Jawaban saya sebelumnya sudah ... Bahasa Indonesia")
+META_REPLY = re.compile(r"\b(?:jawaban (?:saya |anda )?sebelumnya|previous answer|tidak perlu (?:mengubah|diubah)|"
+                        r"no (?:changes?|need to change)|already (?:entirely |fully )?in (?:english|indonesian)|"
+                        r"sudah (?:sepenuhnya )?dalam bahasa)\b", re.I)
+# "Apakah Anda ingin ...?", "Let me know if ...": the prompt forbids a next-question line, the model still adds one
+CLOSING_OFFER = re.compile(r"^\s*\**\s*(?:apakah anda (?:ingin|mau|perlu)|apa anda (?:ingin|mau)|jika anda (?:memerlukan|ingin|"
+                           r"perlu|butuh|mau)|kalau anda (?:ingin|mau|perlu)|silakan (?:beritahu|beri tahu|tanyakan|hubungi)|"
+                           r"would you like|do you want|if you (?:need|want|would like)|let me know|feel free)\b", re.I)
+
+
+def _without_closing_offer(answer: str) -> str:
+    """drops trailing offer lines; never the whole answer"""
+    lines = answer.rstrip().splitlines()
+    while len([ln for ln in lines if ln.strip()]) > 1 and CLOSING_OFFER.search(lines[-1]):
+        lines.pop()
+        while lines and not lines[-1].strip():
+            lines.pop()
+    return "\n".join(lines)
 
 
 MODEL_LINK = re.compile(r"!?\[[^\]]*\]\((?:/static/|/exports/|https?://)[^)]*\)")
@@ -486,7 +606,7 @@ GROUP_WORD = r"\b(?:grup\w*|groups?|kelompok\w*|divisi\w*|departemen\w*|departme
 TREND_WORD = (r"\b(?:tren\w*|trend\w*|dari waktu ke waktu|over time|membaik|memburuk|getting (?:better|worse)|improv\w*"
               r"|riwayat|history|naik|turun|perkembangan)\b")
 TOPIC_TOOLS = (
-    (re.compile(r"\b(?:apa saja|daftar|list|punya|tersedia|available|library|pustaka|katalog|catalog|dibeli|purchased|"
+    (re.compile(MODSTORE_ASK.pattern + r"|\b(?:apa saja|daftar|list|punya|tersedia|available|library|pustaka|katalog|catalog|dibeli|purchased|"
                 r"terbaru|newest|latest|rekomendasi\w*|recommend\w*)\b"
                 r"[^.?!]{0,40}\b(?:modul\w*|modules?|konten|content|materi|video\w*|courses?|kursus)\b"
                 r"|\b(?:modul\w*|modules?|konten|content|materi|courses?|kursus)\b[^.?!]{0,40}"
@@ -856,6 +976,13 @@ class Agent:
                 gid = None
             if isinstance(gid, int):
                 state["trend_group_id"] = gid
+        if name == "training_library" and not getattr(result, "is_error", False):
+            try:
+                library = json.loads(text)
+            except ValueError:
+                library = None
+            if isinstance(library, dict) and not library.get("error"):
+                state.setdefault("libraries", []).append(library)
         if name in ("account_risk_overview", "user_risk_summary") and not getattr(result, "is_error", False):
             try:
                 summary = json.loads(text)
@@ -1172,8 +1299,13 @@ class Agent:
                             if streamed:
                                 yield {"type": "reset"}
                             answer = _drop_sentences_with(answer, ungrounded) or msg("no_answer", language)
+                    if rewritten and state.get("language_draft") and META_REPLY.search(answer) and not answer.lstrip().startswith("**"):
+                        # it talked about the request instead of rewriting: the draft is the better answer
+                        print("[AGENT] Rewrite came back as a remark, keeping the draft", flush=True)
+                        answer = state["language_draft"]
                     if (CJK.search(answer) or _wrong_language(NOTE_LINE.sub("", answer), language)) and not rewritten:
                         rewritten = True
+                        state["language_draft"] = answer
                         print("[AGENT] Answer in the wrong language or script, asking for a rewrite", flush=True)
                         if streamed:
                             yield {"type": "reset"}
@@ -1202,10 +1334,15 @@ class Agent:
                     if choice.finish_reason == "length":
                         answer += "\n\n" + msg("cut_off", language)
                     # the notes are for the model only
-                    answer = NOTE_LINE.sub("", answer).strip()
+                    answer = _without_closing_offer(NOTE_LINE.sub("", answer).strip())
                     # a forecast question opens with the no-prediction line, which mentions the risk score too
                     if len(state.get("risk_summaries") or []) == 1 and not state.get("users_page") and not FUTURE_ASK.search(prompt):
                         answer = _with_risk_line(answer, state["risk_summaries"][0], language, asked_period=None if state.get("default_period") else state.get("period"))
+                    # only when the library is the whole answer: with module progress too, the first line is about that
+                    if len(state.get("libraries") or []) == 1 and state.get("data_tools") == 1:
+                        answer = _with_library_line(answer, state["libraries"][0], language)
+                    if len(state.get("libraries") or []) == 1:
+                        answer = _with_library_order(answer, state["libraries"][0])
                     answer = _fix_levels(answer)
                     if language == "id":
                         answer = _fix_typos_in_answer(answer)
@@ -1233,6 +1370,8 @@ class Agent:
                     if (fresh := state.get("fresh")) and state.get("kb4_data") and answer.strip():
                         note = msg("fresh_data", language) if fresh["refreshed"] or fresh["age"] is None else msg("fresh_recent", language, seconds=fresh["age"])
                         answer = f"{answer.strip()}\n\n*{note}*"
+                    if MODSTORE_ASK.search(prompt) and state.get("training_library") and state.get("kb4_data") and answer.strip():
+                        answer = f"{_without_catalogue_notes(answer)}\n\n*{msg('modstore_scope', language)}*"
                     answer = answer.strip() or msg("no_answer", language)
                     print("[AGENT] Final answer generated", flush=True)
                     notes = state.get("notes") or []

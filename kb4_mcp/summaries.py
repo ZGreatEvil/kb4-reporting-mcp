@@ -960,6 +960,7 @@ async def training_by_module(
     return result
 
 
+LIBRARY_SCOPE = "This is the account's own library (content added from ModStore), not the whole ModStore catalogue."
 LIBRARY_SORTS = ("most_used", "newest", "recently_purchased")
 
 
@@ -1005,10 +1006,14 @@ async def training_library(
              f"{bought} added to the account); " if period else
              f"The account has {len(purchases)} training content items{' of type ' + repr(content_type) if content_type else ''} ")
             + f"({', '.join(f'{n} {t}' for t, n in types.most_common())}); {len(retired)} are retired and "
-            f"{len(never)} current ones have never been assigned to anyone."
+            f"{len(never)} current ones have never been assigned to anyone. " + LIBRARY_SCOPE
             if purchases else f"No training content{' from ' + period if period else ' in the account'}."
         ),
         "by_type": dict(types),
+        # the agent builds the answer's first line from these, so a count is never put under the wrong label
+        "counts": {"total": len(purchases), "retired": len(retired), "never_assigned": len(never), "published": published,
+                   "added": bought, "start_date": start_date[:10] if start_date else None,
+                   "end_date": end_date[:10] if end_date else None, "content_type": content_type},
         "items": [
             {
                 "name": p.get("name"),
@@ -1023,7 +1028,8 @@ async def training_library(
         ],
         "never_assigned": [p.get("name") for p in never[: _limit(limit, 20)]],
         "length_note": "KnowBe4 lists the length without a unit.",
-        "note": ("Content from the KnowBe4 store that the account has; enrolments counts current users only. For "
+        "note": ("Content from the KnowBe4 store that the account has, not the whole ModStore catalogue (the API does not "
+                 "list it); never call this ModStore-wide. Enrolments counts current users only. For "
                  "'recommend' questions list facts only (new content, content never assigned), not opinions. " + NO_ADVICE),
     }
 

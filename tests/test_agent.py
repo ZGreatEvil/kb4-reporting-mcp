@@ -1504,3 +1504,198 @@ def test_indonesian_decimals_use_a_comma(raw, clean):
     from agent.agent import _fix_typos_in_answer
 
     assert _fix_typos_in_answer(raw) == clean
+
+
+@pytest.mark.parametrize("prompt,language", [
+    ("rekomendasikan modul dari modstore 2026", "id"), ("katalog konten knowbe4 apa saja?", "id"),
+    ("what's new in ModStore?", "en"), ("show the KnowBe4 content catalogue", "en"),
+])
+async def test_modstore_questions_say_the_catalogue_is_not_visible(monkeypatch, prompt, language):
+    # the api only lists what the account added, so the library must not pass for the whole ModStore
+    session = topic_session()
+    llm = FakeLLM([reply("**Jawaban tanpa data.**"), reply("**Dari library.**")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask(prompt, language)
+    assert "training_library" in [c[0] for c in session.calls]
+    assert answer.endswith("*" + msg("modstore_scope", language) + "*")
+
+
+@pytest.mark.parametrize("prompt", ["konten training apa saja yang kita punya?", "berapa email yang di-store PhishER?",
+                                    "katalog keamanan apa saja yang kita punya?"])
+async def test_other_questions_get_no_modstore_line(monkeypatch, prompt):
+    session = topic_session()
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "training_library", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Dari library.**"),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert msg("modstore_scope", "id") not in answer
+
+
+
+LIBRARY = {"headline": "h", "counts": {"total": 67, "retired": 8, "never_assigned": 14, "published": None, "added": None,
+                                     "start_date": None, "end_date": None, "content_type": None}}
+
+
+def library_session(counts=None):
+    session = topic_session()
+    session.results["training_library"] = dict(LIBRARY, counts=dict(LIBRARY["counts"], **(counts or {})))
+    return session
+
+
+@pytest.mark.parametrize("language", ["id", "en"])
+async def test_library_first_line_comes_from_the_counts(monkeypatch, language):
+    # live: "14 new content items added in the last two months" where 14 was the never-assigned count
+    draft = ("**The library has 14 new content items added recently.**\n\n- 14 new items were added recently.\n"
+             "- 14 items have never been assigned to anyone.\n- Newest: Password Basics.")
+    # the id run asks for one rewrite of this english draft first
+    llm = FakeLLM([reply(calls=[tool_call("c1", "training_library", '{"console": "main"}')], finish="tool_calls"),
+                   reply(draft), reply(draft)])
+    answer = await make_agent(make_config(monkeypatch), llm, library_session()).ask("konten training apa saja yang kita punya?", language)
+    first, *rest = answer.splitlines()
+    assert first == "**" + msg("library_line", language, total=67, retired=8, never=14) + "**"
+    assert "14 new items were added" not in answer
+    assert "14 items have never been assigned" in answer and "Newest: Password Basics" in answer
+
+
+async def test_library_line_with_a_period(monkeypatch):
+    session = library_session({"total": 7, "published": 2, "added": 7, "never_assigned": 6, "start_date": "2026-01-01"})
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "training_library", '{"console": "main", "start_date": "2026-01-01"}')], finish="tool_calls"),
+        reply("**Ada 6 konten terbaru di 2026.**"),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("konten training terbaru di 2026 apa saja?")
+    assert answer.startswith("**" + msg("library_line_period", "id", period="2026-01-01 – sekarang", total=7, published=2,
+                                        added=7, never=6) + "**")
+
+
+async def test_library_line_left_alone_with_other_data(monkeypatch):
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "training_library", '{"console": "main"}'),
+                     tool_call("c2", "training_by_module", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Modul terbaik: Password Basics.**"),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, library_session()).ask("konten apa saja yang kita punya dan mana yang terbaik?")
+    assert answer.startswith("**Modul terbaik: Password Basics.**")
+
+
+async def test_library_line_skips_a_type_filter(monkeypatch):
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "training_library", '{"console": "main", "content_type": "game"}')], finish="tool_calls"),
+        reply("**Ada beberapa game.**"),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, library_session({"content_type": "game"})).ask("konten game apa saja yang kita punya?")
+    assert answer.startswith("**Ada beberapa game.**")
+
+
+TITLES_ID = ("**Pustaka berisi 67 konten.**\n\nFakta utama:\n- Contoh: \"The Inside Man: Season 1\", \"Security Awareness Foundations\"\n"
+             "- Video: The Art of Phishing and the Price of Clicking\n- Game: Double Trouble Trivia: Password Security Game\n"
+             "| Nama | Jenis |\n| --- | --- |\n| The Power of the Password | Video Module |\n"
+             "Sebagian besar konten adalah video dan belum pernah ditugaskan.")
+
+
+def test_english_titles_do_not_make_an_answer_english():
+    # live: a list of module names got an indonesian answer rewritten, and the rewrite was a remark
+    from agent.agent import _wrong_language
+    assert _wrong_language(TITLES_ID, "id") is False
+    # a real english answer around the same list is still caught
+    english = TITLES_ID.replace("Sebagian besar konten adalah video dan belum pernah ditugaskan.",
+                                "Most of the content is video and it has never been assigned to the users of this account.")
+    assert _wrong_language(english.replace("Pustaka berisi 67 konten", "The library has 67 items")
+                           .replace("Fakta utama", "Key facts"), "id") is True
+
+
+@pytest.mark.parametrize("remark,language", [
+    ("Jawaban saya sebelumnya sudah sepenuhnya dalam Bahasa Indonesia, jadi tidak perlu mengubah apa pun.", "id"),
+    ("My previous answer is already in English, so no changes are needed.", "en"),
+])
+async def test_a_remark_instead_of_a_rewrite_keeps_the_draft(monkeypatch, remark, language):
+    draft = ("**Risk score Contoh saat ini adalah 39,4.** Skor ini berada di level Low untuk semua pengguna dari data ini."
+             if language == "en" else
+             "**The current risk score of Contoh is 39.4 (Low level).** This is the Low band and it is good for the users.")
+    llm = FakeLLM([reply(calls=[tool_call("a", "get_account", '{"console": "main"}')], finish="tool_calls"),
+                   reply(draft), reply(remark)])
+    kept = draft.replace("39.4", "39,4") if language == "id" else draft   # id answers get decimal commas
+    assert await make_agent(make_config(monkeypatch), llm, FakeSession()).ask("risk score?", language) == kept
+
+
+async def test_a_real_rewrite_is_still_used(monkeypatch):
+    english = "**The current risk score of Contoh is 39.4 (Low level).** This is the Low band and it is good for the users."
+    fixed = "**Risk score Contoh saat ini 39,4 (Low).** Jawaban sebelumnya sudah diperbaiki: ini level Low untuk pengguna."
+    llm = FakeLLM([reply(calls=[tool_call("a", "get_account", '{"console": "main"}')], finish="tool_calls"),
+                   reply(english), reply(fixed)])
+    assert await make_agent(make_config(monkeypatch), llm, FakeSession()).ask("risk score?", "id") == fixed
+
+
+@pytest.mark.parametrize("offer", [
+    "Apakah Anda ingin melihat detail lebih lanjut tentang jenis konten tertentu?",
+    "Jika Anda memerlukan informasi tambahan, silakan beritahu saya.",
+    "**Would you like a chart of this?**",
+    "Let me know if you need more.",
+])
+def test_closing_offers_are_dropped(offer):
+    from agent.agent import _without_closing_offer
+    body = "**Risk score 39,4 (Low).**\n\n- 55 pengguna."
+    assert _without_closing_offer(f"{body}\n\n{offer}") == body
+    assert _without_closing_offer(f"{body}\n\n{offer}\n\n{offer}") == body
+    # an offer that is the whole answer, or one in the middle, stays
+    assert _without_closing_offer(offer) == offer
+    assert _without_closing_offer(f"{body}\n{offer}\n- 3 grup.").endswith("- 3 grup.")
+
+
+ORDERED = {"items": [{"name": "Compliance in 3 Minutes"}, {"name": "Acceptable Use Policy"}, {"name": "AI Chatbots"}]}
+
+
+def test_library_table_rows_follow_the_tool_order():
+    # live: "urut berdasarkan tanggal publikasi" with a 2023 item on top
+    from agent.agent import _with_library_order
+    answer = ("**Konten terbaru.**\n\n| Nama | Dipublikasikan |\n|---|---|\n| AI Chatbots | 2023-07-06 |\n"
+              "| **Compliance in 3 Minutes** | 2026-09-28 |\n| \"Acceptable Use Policy\" | 2025-01-29 |\n\nSelesai.")
+    fixed = _with_library_order(answer, ORDERED)
+    rows = [ln for ln in fixed.splitlines() if ln.startswith("| ") and "Nama" not in ln]
+    assert [r.split("|")[1].strip(" *\"") for r in rows] == ["Compliance in 3 Minutes", "Acceptable Use Policy", "AI Chatbots"]
+    assert fixed.startswith("**Konten terbaru.**") and fixed.endswith("Selesai.")
+
+
+@pytest.mark.parametrize("table", [
+    "| Nama | Lulus |\n|---|---|\n| AI Chatbots | 0 |\n| Phishing 101 | 3 |",   # a row that is not a library item
+    "| Nama | Lulus |\n|---|---|\n| AI Chatbots | 0 |",                         # one row: nothing to order
+])
+def test_other_tables_keep_their_order(table):
+    from agent.agent import _with_library_order
+    assert _with_library_order(table, ORDERED) == table
+
+
+async def test_library_table_is_reordered_in_the_answer(monkeypatch):
+    session = topic_session()
+    session.results["training_library"] = {"headline": "h", "items": [{"name": "Password Basics"}, {"name": "Unused Game"}]}
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "training_library", '{"console": "main", "sort": "newest"}')], finish="tool_calls"),
+        reply("**Konten terbaru di pustaka.**\n\n| Nama | Jenis |\n|---|---|\n| Unused Game | Game |\n| Password Basics | Video |"),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("konten training terbaru apa saja?")
+    assert answer.index("| Password Basics |") < answer.index("| Unused Game |")
+
+
+def test_model_catalogue_notes_are_dropped_when_the_fixed_line_is_added():
+    # live: "perlu menghubungi tim untuk akses penuh ke katalog ModStore" (made up), next to the fixed line
+    from agent.agent import _without_catalogue_notes
+    answer = ("**Data hanya untuk pustaka akun, bukan seluruh katalog ModStore.**\n\n**Fakta utama:**\n- 7 konten baru\n"
+              "- Pustaka ini milik akun. Bukan katalog ModStore keseluruhan.\n\n**Kenapa:**\n\nAda 6 konten belum ditugaskan.\n\n"
+              "**Catatan:** API tidak menampilkan seluruh katalog ModStore. Perlu menghubungi tim untuk akses penuh ke katalog ModStore.\n\n"
+              "| Nama | Sumber |\n|---|---|\n| AI Chatbots | ModStore |")
+    fixed = _without_catalogue_notes(answer)
+    assert fixed.startswith("**Data hanya untuk pustaka akun, bukan seluruh katalog ModStore.**")
+    assert "menghubungi tim" not in fixed and "Catatan" not in fixed
+    assert "- Pustaka ini milik akun." in fixed and "Bukan katalog" not in fixed
+    # headings with their content, and table rows, stay
+    assert "**Kenapa:**\n\nAda 6 konten belum ditugaskan." in fixed and "**Fakta utama:**" in fixed
+    assert "| AI Chatbots | ModStore |" in fixed
+
+
+async def test_catalogue_notes_only_go_on_modstore_questions(monkeypatch):
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "training_library", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Dari library.**\n\nKonten ini dibeli dari ModStore."),
+    ])
+    answer = await make_agent(make_config(monkeypatch), llm, topic_session()).ask("konten training apa saja yang kita punya?")
+    assert "Konten ini dibeli dari ModStore." in answer

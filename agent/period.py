@@ -30,6 +30,9 @@ FROM = r"(?:dari|sejak|mulai|semenjak|from|since|starting|after|setelah|sesudah)
 TO = r"(?:sampai|sampe|smp|hingga|s\.?d\.?|until|till|to|through|-|–|dan|and)"
 BEFORE = r"(?:sebelum|before|prior to)"
 UNTIL = r"(?:sampai|sampe|hingga|until|up to)"
+# "2010 request", "2026 users": a count, not a year
+COUNT_WORD = (r"(?:users?|pengguna|orang|karyawan|employees?|peserta|requests?|permintaan|items?|konten|content|emails?"
+              r"|modul\w*|modules?|kali|times|x)\b")
 ONWARDS = r"(?:onwards?|and later|ke ?atas|dan seterusnya|seterusnya|ke depan|and after)"
 UNITS = {
     "hari": "day", "day": "day", "days": "day",
@@ -173,6 +176,12 @@ def parse_period(question: str, today: date | None = None) -> Period | None:
     if m := re.search(rf"\b(?:tahun|in|di|pada|during|selama)\s+({YEAR})\b", q):
         span = _span(m[1], today)
         return Period(span[0], _open_end(span[1], today))
+    # a lone year anywhere ("modul dari modstore 2026"): only one, recent, not part of a date, id, quote or count
+    unquoted = re.sub(r"\"[^\"]*\"|'[^']*'|“[^”]*”", " ", q)
+    years = set(re.findall(rf"(?<![\w./-]){YEAR}(?![\w./-])", unquoted))
+    if len(years) == 1 and today.year - 10 <= (year := int(years.pop())) <= today.year:
+        if not re.search(rf"(?<![\w./-]){year}\s+{COUNT_WORD}", unquoted):
+            return Period(date(year, 1, 1), _open_end(date(year, 12, 31), today))
     return None
 
 

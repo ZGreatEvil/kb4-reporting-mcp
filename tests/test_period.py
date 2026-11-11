@@ -49,6 +49,9 @@ TODAY = date(2026, 11, 6)
     ("hasil phishing maret 2026", "2026-03-01", "2026-03-31"),
     ("training tahun 2025", "2025-01-01", "2025-12-31"),
     ("phishing in 2026", "2026-01-01", None),
+    # a lone year after other words
+    ("rekomendasikan modul dari modstore 2026", "2026-01-01", None),
+    ("modules 2025 completion", "2025-01-01", "2025-12-31"),
 ])
 def test_periods(question, start, end):
     p = parse_period(question, TODAY)
@@ -64,6 +67,11 @@ def test_periods(question, start, end):
     "risk score 39.4 itu bagus?",
     "kenapa skor 2 orang itu 47.09",
     "NIST SP 800-50 bilang apa",
+    "batas 2010 request per hari",                    # a count, not a year
+    "berapa 2025 users yang aktif",
+    'modul "Newsletter 2025" sudah dibuka siapa',     # a quoted title
+    "risk score 2026 vs 2025",                        # two years: not one period
+    "kampanye 2015",                                  # too old to be meant as a filter
 ])
 def test_no_period(question):
     assert parse_period(question, TODAY) is None
