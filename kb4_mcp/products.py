@@ -18,6 +18,7 @@ from kb4_mcp.summaries import (
     _period_label,
     _r,
     _within,
+    _words_match,
 )
 
 MAX_PAGES = 5
@@ -386,6 +387,32 @@ COACH_QUERY = (
 )
 
 
+COACH_SETUP_QUERY = (
+    "query CoachingSetup { securityCoachCampaigns(all: true) { pagination { totalCount } nodes { name status campaignType testMode "
+    "tipsDelivered } } securityCoachListDetectionRules(pageSize: 100) { count results { name enabled vendorCodeName riskLevel } } "
+    "securityCoachNotifications { nodes { name } } }"
+)
+
+
+async def _coaching_setup(kb: Any, console: str) -> dict[str, Any]:
+    """campaigns, detection rules and notification templates; "no campaign" was wrong once (3 system campaigns in test mode)"""
+    try:
+        data = await kb.graph(console, "coach", COACH_SETUP_QUERY)
+    except Exception as exc:  # the overview still answers
+        return {"error": f"campaigns and rules could not be read ({type(exc).__name__})"}
+    campaigns = [{"name": c.get("name"), "status": c.get("status"), "type": c.get("campaignType"), "test_mode": c.get("testMode"),
+                  "tips_delivered": c.get("tipsDelivered") or 0} for c in (data.get("securityCoachCampaigns") or {}).get("nodes") or []]
+    rules = (data.get("securityCoachListDetectionRules") or {}).get("results") or []
+    return {
+        "campaigns": campaigns,
+        "campaigns_in_test_mode": sum(1 for c in campaigns if c["test_mode"]),
+        "detection_rules": len(rules),
+        "detection_rules_enabled": sum(1 for r in rules if r.get("enabled")),
+        "rule_vendors": sorted({str(r.get("vendorCodeName")) for r in rules if r.get("vendorCodeName")}),
+        "notification_templates": [n.get("name") for n in (data.get("securityCoachNotifications") or {}).get("nodes") or []],
+    }
+
+
 async def security_coaching(kb: Any, console: str, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
     """Real-Time Coaching (SecurityCoach): is it set up, how much coaching went out, who triggered it most"""
     if problem := _bad_period(start_date, end_date):
@@ -396,8 +423,11 @@ async def security_coaching(kb: Any, console: str, start_date: str | None = None
     setup = data.get("securityCoachSetupStatus") or {}
     overview = data.get("securityCoachRealTimeCoachingOverview") or {}
     period = _period_label(start_date, end_date) or "all time"
+    extra = await _coaching_setup(kb, console)
+    campaigns = extra.get("campaigns") or []
     missing = [label for key, label in (("vendorIntegrated", "no security tool connected"), ("deliveryMethodAdded", "no delivery method"),
-                                        ("detectionRulesReviewed", "detection rules not reviewed"), ("rtcCampaignCreated", "no coaching campaign yet"))
+                                        ("detectionRulesReviewed", "detection rules not reviewed"),
+                                        ("rtcCampaignCreated", "no live coaching campaign yet"))
                if not setup.get(key)]
     return {
         "console": console,
@@ -405,8 +435,14 @@ async def security_coaching(kb: Any, console: str, start_date: str | None = None
         "headline": (
             f"Real-Time Coaching from {period}: {overview.get('coachingDelivered') or 0} coaching messages to "
             f"{overview.get('totalUsersCoached') or 0} people ({overview.get('repeatedOffenders') or 0} repeat offenders)."
+            + (f" {_count(len(campaigns), 'coaching campaign')} ({extra.get('campaigns_in_test_mode', 0)} in test mode),"
+               f" {extra.get('detection_rules_enabled', 0)} of {extra.get('detection_rules', 0)} detection rules enabled." if campaigns or extra.get("detection_rules") else "")
             + (f" Setup is incomplete: {', '.join(missing)}." if missing else " Setup is complete.")
         ),
+        "campaigns": campaigns,
+        "detection_rules": {k: extra.get(k) for k in ("detection_rules", "detection_rules_enabled", "rule_vendors")},
+        "notification_templates": extra.get("notification_templates"),
+        "setup_error": extra.get("error"),
         "setup": {"security_tool_connected": setup.get("vendorIntegrated"), "delivery_method": setup.get("deliveryMethodAdded"),
                   "detection_rules_reviewed": setup.get("detectionRulesReviewed"), "coaching_campaign": setup.get("rtcCampaignCreated")},
         "coaching_delivered": overview.get("coachingDelivered"),
@@ -486,6 +522,303 @@ async def user_events(
         "top_users": [{"user": u, "events": n} for u, n in users.most_common(_limit(limit))],
         "latest": [{k: e.get(k) for k in ("event_type", "source", "occurred_date", "description")} for e in rows[: _limit(limit)]],
         "meaning": "the User Event API lets other tools (DLP, EDR, HR systems) add events to a person's KnowBe4 record",
+        "note": NO_ADVICE,
+    }
+
+
+# ---------------------------------------------------------------- ModStore: the media catalogue (Real-Time Coaching)
+
+# the only ModStore listing in KnowBe4's APIs: videos and coaching content (checked 2026-11-12, 453 items). training
+# courses are not listed anywhere; securityCoachCatalogContent answers HTTP 500 with every argument set tried
+MODSTORE_QUERY = ("query ModStore { securityCoachContent { nodes { id title contentType { name } contentOptions { name } "
+                  "translations { language { code } } } } }")
+MODSTORE_NOT_LISTED = ("KnowBe4's API lists ModStore videos and coaching content only; ModStore training courses are not listed "
+                       "by any KnowBe4 API, so they can only be browsed in the console (Training > ModStore).")
+
+
+async def modstore_content(
+    kb: Any, console: str, search: str | None = None, content_type: str | None = None, style: str | None = None,
+    language: str | None = None, limit: int = 15,
+) -> dict[str, Any]:
+    """the ModStore media catalogue (videos, coaching content), searchable, with what the account already has"""
+    nodes = (await kb.graph(console, "coach", MODSTORE_QUERY)).get("securityCoachContent", {}).get("nodes") or []
+    owned = {str(p.get("name") or "").strip().casefold() for p in await kb.list_store_purchases(console)}
+    items = []
+    for n in nodes:
+        langs = sorted({str(((t.get("language") or {}).get("code")) or "") for t in n.get("translations") or []} - {""})
+        items.append({
+            "title": n.get("title"),
+            "type": (n.get("contentType") or {}).get("name"),
+            "style": [o.get("name") for o in n.get("contentOptions") or [] if o.get("name")],
+            "languages": len(langs),
+            "indonesian": any(c == "id" or c.startswith("id-") for c in langs),
+            "in_library": str(n.get("title") or "").strip().casefold() in owned,
+            "_langs": langs,
+        })
+    types = Counter(str(i["type"] or "?") for i in items)
+    picked = items
+    if search and search.strip():
+        picked = [i for i in picked if _words_match(i["title"], search)]
+    if content_type and content_type.strip():
+        picked = [i for i in picked if _words_match(i["type"], content_type)]
+    if style and style.strip():
+        picked = [i for i in picked if any(_words_match(s, style) for s in i["style"])]
+    if language and language.strip():
+        code = language.strip().lower()
+        picked = [i for i in picked if any(c == code or c.startswith(code + "-") for c in i["_langs"])]
+    filters = ", ".join(f"{k} '{v}'" for k, v in (("search", search), ("type", content_type), ("style", style), ("language", language)) if v and str(v).strip())
+    have = sum(1 for i in picked if i["in_library"])
+    # not in the library first: those are the new options
+    picked = sorted(picked, key=lambda i: (i["in_library"], str(i["title"] or "")))
+    return {
+        "console": console,
+        "headline": (
+            f"The ModStore media catalogue has {len(items)} items ({', '.join(f'{n} {t}' for t, n in types.most_common())})"
+            + (f"; {len(picked)} match {filters}" if filters else "")
+            + f"; {have} of {'those' if filters else 'them'} are already in the account's library and "
+            f"{len(picked) - have} are not. " + MODSTORE_NOT_LISTED
+            if items else "The ModStore media catalogue returned no items. " + MODSTORE_NOT_LISTED
+        ),
+        "catalogue_total": len(items),
+        "by_type": dict(types),
+        "matching": len(picked),
+        "already_in_library": have,
+        "items": [{k: v for k, v in i.items() if k != "_langs"} for i in picked[: _limit(limit, 15)]],
+        "meaning": ("ModStore is KnowBe4's content store; this list is its media catalogue (Real-Time Coaching): videos and "
+                    "short coaching content. in_library = the account already has it; indonesian = an Indonesian version exists"),
+        "note": "Recommend only from these items and their facts (type, style, languages, in_library). " + NO_ADVICE,
+    }
+
+
+# ---------------------------------------------------------------- KSAT: templates and landing pages
+
+TEMPLATE_KINDS = ("phishing", "landing", "notification", "callback")
+TEMPLATE_SOURCES = {"system": "SYSTEM", "own": "USER"}
+DIFFICULTY = {"BASIC": 1, "LIMITED": 2, "MODERATE": 3, "SIGNIFICANT": 4, "ADVANCED": 5}
+PHISHING_TEMPLATES_QUERY = (
+    "query Templates($type: PhishingTemplateTypes, $search: String, $per: Int, $difficulty: [EmailTemplateDifficultyRatings!]) "
+    "{ phishingTemplates(type: $type, search: $search, per: $per, difficulty: $difficulty, sortField: UPDATED, sortDirection: DESCENDING) "
+    "{ pagination { totalCount } nodes { name subject rating languageCode updatedAt category { name } } } }"
+)
+TEMPLATE_CATEGORIES_QUERY = "query Categories($type: PhishingTemplateTypes) { phishingTemplateCategories(type: $type) { nodes { name templateCount } } }"
+LANDING_QUERY = ("query Landing($type: LandingPageTypes, $search: String, $per: Int) { landingPages(type: $type, search: $search, per: $per, "
+                 "sortField: UPDATED, sortDirection: DESCENDING) { pagination { totalCount } nodes { title type updatedAt category { name } } } }")
+NOTIFICATION_QUERY = ("query Notifications($type: NotificationTemplateTypes, $search: String, $per: Int) { notificationTemplates(type: $type, "
+                      "search: $search, per: $per, sortField: UPDATED, sortDirection: DESCENDING) { pagination { totalCount } nodes { name "
+                      "subject type languageCode archived updatedAt category { name } } } }")
+CALLBACK_QUERY = (
+    "query Callback($type: CallbackPhishingAudioTemplateTypes, $search: String, $per: Int) { "
+    "callbackPhishingGreetingTemplates(type: $type, search: $search, per: $per) { pagination { totalCount } nodes { title persona languageCode "
+    "templateType topics { name } } } callbackPhishingResponseTemplates(type: $type, search: $search, per: $per) { pagination { totalCount } } }"
+)
+
+
+def _total(block: Any) -> int:
+    return ((block or {}).get("pagination") or {}).get("totalCount") or 0
+
+
+async def templates(
+    kb: Any, console: str, kind: str = "phishing", search: str | None = None, source: str = "system",
+    difficulty: str | None = None, limit: int = 10,
+) -> dict[str, Any]:
+    """KnowBe4's template libraries: phishing email templates, landing pages, notification emails, callback (phone) scripts"""
+    kind = (kind or "phishing").strip().lower()
+    if kind not in TEMPLATE_KINDS:
+        return {"console": console, "error": True, "message": f"kind must be one of {', '.join(TEMPLATE_KINDS)}."}
+    source = (source or "system").strip().lower()
+    if source not in TEMPLATE_SOURCES:
+        return {"console": console, "error": True, "message": "source must be 'system' (KnowBe4's library) or 'own' (made in this account)."}
+    rating = None
+    if difficulty and difficulty.strip():
+        rating = next((d for d in DIFFICULTY if d.lower().startswith(difficulty.strip().lower()[:4])), None)
+        if not rating:
+            return {"console": console, "error": True, "message": f"difficulty must be one of {', '.join(d.lower() for d in DIFFICULTY)}."}
+    per = _limit(limit, 10)
+    who = "KnowBe4's library" if source == "system" else "templates made in this account"
+    # "KnowBe4" must keep its capitals (str.capitalize gave "Knowbe4")
+    has = "KnowBe4's library has" if source == "system" else "The account has made"
+    found = f" matching '{search.strip()}'" if search and search.strip() else ""
+    base = {"console": console, "kind": kind, "source": who, "note": NO_ADVICE}
+    variables = {"type": TEMPLATE_SOURCES[source], "search": (search or "").strip() or None, "per": per}
+    if kind == "phishing":
+        # every type at once times out at KnowBe4 (HTTP 504), so one type per request
+        data = await kb.graph(console, "ksat", PHISHING_TEMPLATES_QUERY, {**variables, "difficulty": [rating] if rating else None})
+        block = data.get("phishingTemplates") or {}
+        rows = [{"name": n.get("name"), "subject": n.get("subject"), "difficulty": str(n.get("rating") or "").lower() or None,
+                 "category": (n.get("category") or {}).get("name"), "language": n.get("languageCode"), "updated": _date(n.get("updatedAt"))}
+                for n in block.get("nodes") or []]
+        categories = []
+        if not found and not rating:
+            cats = (await kb.graph(console, "ksat", TEMPLATE_CATEGORIES_QUERY, {"type": TEMPLATE_SOURCES[source]})).get("phishingTemplateCategories") or {}
+            categories = sorted(({"category": c.get("name"), "templates": c.get("templateCount") or 0} for c in cats.get("nodes") or []),
+                                key=lambda c: -c["templates"])[:10]
+        level = f" at {rating.lower()} difficulty" if rating else ""
+        return {**base, "headline": f"{has} {_total(block):,} phishing email templates{found}{level}.",
+                "total": _total(block), "templates": rows, "largest_categories": categories,
+                "difficulty_scale": "basic < limited < moderate < significant < advanced (KnowBe4's rating)"}
+    if kind == "landing":
+        data = await kb.graph(console, "ksat", LANDING_QUERY, variables)
+        block = data.get("landingPages") or {}
+        rows = [{"title": n.get("title"), "category": (n.get("category") or {}).get("name"), "updated": _date(n.get("updatedAt"))}
+                for n in block.get("nodes") or []]
+        return {**base, "headline": f"{has} {_total(block):,} landing pages{found} (the page shown after someone clicks a test link).",
+                "total": _total(block), "landing_pages": rows}
+    if kind == "notification":
+        variables["type"] = "SYSTEM" if source == "system" else "USER"
+        data = await kb.graph(console, "ksat", NOTIFICATION_QUERY, variables)
+        block = data.get("notificationTemplates") or {}
+        rows = [{"name": n.get("name"), "subject": n.get("subject"), "category": (n.get("category") or {}).get("name"),
+                 "language": n.get("languageCode"), "archived": n.get("archived"), "updated": _date(n.get("updatedAt"))}
+                for n in block.get("nodes") or []]
+        return {**base, "headline": f"{has} {_total(block):,} notification email templates{found} (training reminders and similar).",
+                "total": _total(block), "notification_templates": rows}
+    data = await kb.graph(console, "ksat", CALLBACK_QUERY, variables)
+    greetings = data.get("callbackPhishingGreetingTemplates") or {}
+    responses = data.get("callbackPhishingResponseTemplates") or {}
+    rows = [{"title": n.get("title"), "persona": n.get("persona"), "language": n.get("languageCode"),
+             "topics": [t.get("name") for t in n.get("topics") or []]} for n in greetings.get("nodes") or []]
+    return {**base, "headline": (f"{has} {_total(greetings):,} callback (phone) phishing greeting scripts and "
+                                 f"{_total(responses):,} response scripts{found}."),
+            "greetings_total": _total(greetings), "responses_total": _total(responses), "greetings": rows,
+            "meaning": "callback phishing: an email asks people to phone a number; the greeting and response scripts are what the caller hears"}
+
+
+# ---------------------------------------------------------------- KSAT: admin roles and Second Chance settings
+
+ROLE_AREAS = {
+    "phishingCampaigns": "phishing campaigns", "phishingTemplates": "phishing templates", "phishingLandingPages": "landing pages",
+    "phishingReports": "phishing reports", "trainingCampaigns": "training campaigns", "trainingTemplates": "training templates",
+    "trainingReports": "training reports", "users": "users", "accountSettings": "account settings", "auditLog": "audit log",
+    "passwordIq": "PasswordIQ", "secondChanceSettings": "Second Chance settings", "securityCoachSetup": "Real-Time Coaching setup",
+    "storeItems": "ModStore items", "usbCampaigns": "USB tests", "vishingCampaigns": "vishing campaigns",
+    "executiveReports": "executive reports", "advancedReporting": "advanced reporting",
+}
+SETTINGS_QUERY = (
+    "query Settings { securityRoles(per: 50) { pagination { totalCount } nodes { name userCount updatedAt groups { name } permissions { "
+    + " ".join(ROLE_AREAS) + " } } } secondChanceSettings { doNotPromptForPhishingTests doNotPromptOnInternalHosts unwrapRewriters "
+    "unwrapShorteners useOrion updatedAt } secondChanceOverview { deviceCount } }"
+)
+
+
+async def account_settings(kb: Any, console: str) -> dict[str, Any]:
+    """admin roles (who can do what in the console) and the Second Chance settings"""
+    data = await kb.graph(console, "ksat", SETTINGS_QUERY)
+    roles = []
+    for r in (data.get("securityRoles") or {}).get("nodes") or []:
+        perms = r.get("permissions") or {}
+        roles.append({"role": r.get("name"), "people": r.get("userCount") or 0, "groups": [g.get("name") for g in r.get("groups") or []],
+                      "areas": [label for key, label in ROLE_AREAS.items() if perms.get(key)],
+                      "levels": {label: perms.get(key) for key, label in ROLE_AREAS.items() if perms.get(key)},
+                      "updated": _date(r.get("updatedAt"))})
+    sc = data.get("secondChanceSettings") or {}
+    devices = (data.get("secondChanceOverview") or {}).get("deviceCount") or 0
+    return {
+        "console": console,
+        "headline": (
+            (f"The account has {_count(len(roles), 'custom admin role')} ("
+             + "; ".join(f"{r['role']}: {_count(r['people'], 'person')}" for r in roles) + "). " if roles else "The account has no custom admin roles. ")
+            + _second_chance(devices) + "."
+        ),
+        "roles": roles,
+        "levels_note": "KnowBe4 gives each area a number (0 = no access); what the higher numbers mean is not documented, so they are shown as given",
+        "second_chance": {
+            "devices": devices,
+            "skips_phishing_tests": sc.get("doNotPromptForPhishingTests"),
+            "skips_internal_sites": sc.get("doNotPromptOnInternalHosts"),
+            "unwraps_link_rewriters": sc.get("unwrapRewriters"),
+            "unwraps_link_shorteners": sc.get("unwrapShorteners"),
+            "settings_updated": _date(sc.get("updatedAt")) or None,
+        },
+        "meaning": "Second Chance asks people to confirm before opening a risky link or attachment; it needs its browser extension on devices",
+        "note": NO_ADVICE,
+    }
+
+
+# ---------------------------------------------------------------- KSAT: how campaigns are set up
+
+CAMPAIGN_KINDS = ("phishing", "training")
+PHISHING_SETUP_QUERY = (
+    "query PhishingSetup($page: Int, $search: String) { phishingCampaigns(per: 25, page: $page, search: $search, filter: ALL) { "
+    "pagination { totalCount pages } nodes { name active campaignType isRecurring frequencyPeriod allUsers groups { name } businessDays "
+    "businessHoursStartHour businessHoursEndHour timeZone trackingDuration trackingDurationUnits aidaSelectedTemplate lastRunDate nextRun "
+    "phishingCampaignRunCount trackReplies } } }"
+)
+TRAINING_SETUP_QUERY = (
+    "query TrainingSetup($page: Int, $search: String) { trainingCampaigns(per: 25, page: $page, search: $search, filter: ALL) { "
+    "pagination { totalCount pages } nodes { name status active allUsers autoEnroll startsAt endsAt durationType relativeDuration "
+    "allowPastDueCompletions sequentialContent knowledgeRefreshersEnabled percentComplete totalUsers groups { name } } } }"
+)
+
+
+async def _campaign_nodes(kb: Any, console: str, query: str, field: str, search: str | None) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    for page in range(1, MAX_PAGES + 1):
+        block = (await kb.graph(console, "ksat", query, {"page": page, "search": (search or "").strip() or None})).get(field) or {}
+        nodes.extend(block.get("nodes") or [])
+        if page >= ((block.get("pagination") or {}).get("pages") or 1):
+            break
+    return nodes
+
+
+async def campaign_settings(kb: Any, console: str, kind: str = "phishing", search: str | None = None, limit: int = 10) -> dict[str, Any]:
+    """how phishing or training campaigns are set up: schedule, recurrence, audience, tracking, auto-enrol"""
+    kind = (kind or "phishing").strip().lower()
+    if kind not in CAMPAIGN_KINDS:
+        return {"console": console, "error": True, "message": "kind must be 'phishing' or 'training'."}
+    found = f" matching '{search.strip()}'" if search and search.strip() else ""
+    if kind == "phishing":
+        nodes = await _campaign_nodes(kb, console, PHISHING_SETUP_QUERY, "phishingCampaigns", search)
+        active = [n for n in nodes if n.get("active")]
+        recurring = [n for n in nodes if n.get("isRecurring")]
+        rows = [{
+            "name": n.get("name"), "active": n.get("active"), "type": n.get("campaignType"),
+            "frequency": str(n.get("frequencyPeriod") or "").lower() or None, "audience": "all users" if n.get("allUsers") else
+            ", ".join(g.get("name") for g in n.get("groups") or []) or None,
+            "business_hours": f"{n.get('businessHoursStartHour')}-{n.get('businessHoursEndHour')}" if n.get("businessHoursStartHour") else None,
+            "time_zone": n.get("timeZone"), "tracking": f"{n.get('trackingDuration')} {str(n.get('trackingDurationUnits') or '').lower()}".strip(),
+            "aida_templates": n.get("aidaSelectedTemplate"), "runs": n.get("phishingCampaignRunCount"),
+            "last_run": _date(n.get("lastRunDate")) or None, "next_run": _date(n.get("nextRun")) or None,
+        } for n in nodes]
+        # active first, then the latest run: sorting by next run let stale dates push the 2026 runs out of the rows shown
+        rows.sort(key=lambda r: str(r["last_run"] or ""), reverse=True)
+        rows.sort(key=lambda r: not r["active"])
+        today = date.today().isoformat()
+        # inactive campaigns keep an old next-run date (2024-07-22 came out as "next run"); only a future one counts
+        upcoming = sorted((r for r in rows if r["active"] and r["next_run"] and r["next_run"] >= today), key=lambda r: r["next_run"])
+        latest = max((r for r in rows if r["last_run"]), key=lambda r: r["last_run"], default=None)
+        return {
+            "console": console, "kind": kind,
+            "headline": (f"{_count(len(nodes), 'phishing campaign')}{found}: {len(active)} active, {len(recurring)} recurring"
+                         + (f"; next run {upcoming[0]['next_run']} ({upcoming[0]['name']})" if upcoming else "; none scheduled to run again")
+                         + (f"; last run {latest['last_run']} ({latest['name']})." if latest else ".")),
+            "total": len(nodes), "active": len(active), "recurring": len(recurring),
+            "by_frequency": dict(Counter(r["frequency"] or "?" for r in rows)),
+            "time_zones": dict(Counter(r["time_zone"] or "?" for r in rows)),
+            "using_aida_templates": sum(1 for r in rows if r["aida_templates"]),
+            "campaigns": rows[: _limit(limit)],
+            "note": NO_ADVICE,
+        }
+    nodes = await _campaign_nodes(kb, console, TRAINING_SETUP_QUERY, "trainingCampaigns", search)
+    rows = [{
+        "name": n.get("name"), "status": str(n.get("status") or "").lower() or None, "active": n.get("active"),
+        "audience": "all users" if n.get("allUsers") else ", ".join(g.get("name") for g in n.get("groups") or []) or None,
+        "auto_enrol": n.get("autoEnroll"), "starts": _date(n.get("startsAt")) or None, "ends": _date(n.get("endsAt")) or None,
+        "duration": n.get("relativeDuration") or n.get("durationType"), "past_due_completions_allowed": n.get("allowPastDueCompletions"),
+        "content_in_order": n.get("sequentialContent"), "knowledge_refreshers": n.get("knowledgeRefreshersEnabled"),
+        "percent_complete": n.get("percentComplete"), "people": n.get("totalUsers"),
+    } for n in nodes]
+    rows.sort(key=lambda r: str(r["starts"] or ""), reverse=True)
+    rows.sort(key=lambda r: not r["active"])
+    statuses = Counter(r["status"] or "?" for r in rows)
+    return {
+        "console": console, "kind": kind,
+        "headline": (f"{_count(len(nodes), 'training campaign')}{found}: "
+                     + ", ".join(f"{n} {s.replace('_', ' ')}" for s, n in statuses.most_common())
+                     + f"; {sum(1 for r in rows if r['auto_enrol'])} enrol new users automatically."),
+        "total": len(nodes), "by_status": dict(statuses),
+        "auto_enrol": sum(1 for r in rows if r["auto_enrol"]),
+        "knowledge_refreshers": sum(1 for r in rows if r["knowledge_refreshers"]),
+        "campaigns": rows[: _limit(limit)],
         "note": NO_ADVICE,
     }
 

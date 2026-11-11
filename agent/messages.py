@@ -127,6 +127,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "id": "Dari {period}: {total} konten baru ({published} diterbitkan KnowBe4, {added} ditambahkan ke akun); {never} belum pernah ditugaskan ke siapa pun.",
         "en": "From {period}: {total} content items are new ({published} published by KnowBe4, {added} added to the account); {never} have never been assigned to anyone.",
     },
+    "modstore_media_scope": {
+        "id": "Daftar ModStore ini berisi video dan konten coaching. Modul pelatihan (course) ModStore tidak tersedia lewat API KnowBe4; lihat di Training → ModStore di console.",
+        "en": "This ModStore list covers videos and coaching content. ModStore training courses are not available through KnowBe4's API; browse them in Training → ModStore in the console.",
+    },
     "modstore_scope": {
         "id": "API KnowBe4 hanya menampilkan konten yang sudah ditambahkan ke akun ini, bukan seluruh katalog ModStore. Untuk melihat semua konten yang bisa ditambahkan, buka Training → ModStore di console.",
         "en": "KnowBe4's API only shows the content already added to this account, not the whole ModStore catalogue. To browse everything you can add, open Training → ModStore in the console.",
@@ -242,8 +246,8 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     # capability lines for product apis, shown only when that product's key is configured
     "capability_ksat": {
-        "id": "- **Benchmark dan simulasi lain:** phish-prone % dibanding benchmark resmi KnowBe4 per industri dan ukuran perusahaan, tes USB, tes QR fisik, semua jenis kampanye (termasuk callback dan vishing), dan log perubahan admin.",
-        "en": "- **Benchmarks and other simulations:** phish-prone % against KnowBe4's official benchmark per industry and company size, USB drive tests, physical QR tests, every campaign type (including callback and vishing), and the admin change log.",
+        "id": "- **Benchmark dan simulasi lain:** phish-prone % dibanding benchmark resmi KnowBe4 per industri dan ukuran perusahaan, tes USB, tes QR fisik, semua jenis kampanye (termasuk callback dan vishing), log perubahan admin, pustaka template KnowBe4 (email phishing, landing page, email notifikasi, skrip callback), peran admin, pengaturan Second Chance, dan jadwal kampanye.",
+        "en": "- **Benchmarks and other simulations:** phish-prone % against KnowBe4's official benchmark per industry and company size, USB drive tests, physical QR tests, every campaign type (including callback and vishing), the admin change log, KnowBe4's template library (phishing emails, landing pages, notification emails, callback scripts), admin roles, Second Chance settings and how campaigns are scheduled.",
     },
     "capability_phisher": {
         "id": "- **Email yang dilaporkan (PhishER):** berapa email mencurigakan yang dilaporkan karyawan, mana yang ancaman, spam atau bersih, mana yang belum ditangani, dan aturan PhishER.",
@@ -254,8 +258,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "- **Passwords (PasswordIQ):** weak, shared, breached or never-expiring passwords from the Active Directory scan.",
     },
     "capability_coach": {
-        "id": "- **Real-Time Coaching:** apakah sudah disiapkan, berapa coaching yang dikirim, dan siapa yang paling sering memicunya.",
-        "en": "- **Real-Time Coaching:** whether it is set up, how much coaching went out, and who triggered it most.",
+        "id": "- **Real-Time Coaching dan ModStore:** apakah sudah disiapkan, kampanye dan aturan deteksi, berapa coaching yang dikirim, siapa yang paling sering memicunya, dan katalog video serta konten coaching ModStore (mana yang sudah ada di akun).",
+        "en": "- **Real-Time Coaching and ModStore:** whether it is set up, campaigns and detection rules, how much coaching went out, who triggered it most, and ModStore's catalogue of videos and coaching content (which ones the account already has).",
     },
     "capability_events": {
         "id": "- **Event dari tool keamanan lain** (User Event API), dan produk KnowBe4 mana yang sedang dipakai.",

@@ -417,10 +417,14 @@ These APIs can also change and delete data. The client only sends fixed read-onl
 | `admin_audit_log(console, category, limit, start_date, end_date)` | KSAT | What admins changed, by whom and when (default the last 90 days) |
 | `reported_emails(console, category, status, limit, start_date, end_date)` | PhishER | Emails employees reported as suspicious: threat / spam / clean / not yet triaged, still open, per month, top reporters, latest |
 | `phisher_rules(console, limit)` | PhishER | Rules, active or not, and how many reported emails each matched |
-| `security_coaching(console, start_date, end_date)` | Real-Time Coaching | Setup (what is missing), coaching sent, people coached, repeat offenders |
+| `security_coaching(console, start_date, end_date)` | Real-Time Coaching | Setup (what is missing), coaching campaigns (and how many are in test mode), detection rules, coaching sent, people coached, repeat offenders |
+| `modstore_content(console, search, content_type, style, language, limit)` | Real-Time Coaching | ModStore's media catalogue (videos and coaching content): type, style, languages, Indonesian version, and whether the account already has it. ModStore training courses are not listed by any KnowBe4 API |
 | `password_risks(console)` | PasswordIQ | Weak, shared, breached or never-expiring Active Directory passwords from the last scan, or that it never scanned |
 | `user_events(console, user_email, limit, start_date, end_date)` | User Event | Events other security tools pushed in, by type, source and person |
 | `product_status(console)` | any | Which products are connected and actually in use |
+| `templates(console, kind, search, source, difficulty, limit)` | KSAT | KnowBe4's template library or the account's own: phishing email templates (with difficulty and the largest categories), landing pages, notification emails, callback scripts |
+| `account_settings(console)` | KSAT | Admin roles (people, groups, areas with access; KnowBe4's access numbers are shown as given) and Second Chance settings |
+| `campaign_settings(console, kind, search, limit)` | KSAT | How phishing or training campaigns are set up: recurring or one-off, next run, audience, business hours, tracking, AIDA templates; training status, auto-enrol, duration, knowledge refreshers |
 
 A product tool is only offered to the chat model when a console has that product's key, and the "what can you do?" answer lists only those products. Checked live on the test account (10 Nov 2026): 59 reported emails, 5 PhishER rules, 2 USB tests, 1 physical QR test, 69 campaigns, an audit log, AIDA on; PasswordIQ never scanned, Real-Time Coaching without a campaign, no user events. The User Event field names (`event_type`, `target_user`, `source`, `occurred_date`) come from the API's event schema; there were no events to check them against.
 

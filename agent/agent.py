@@ -48,7 +48,9 @@ Rules:
    reported_emails (emails employees reported as suspicious, PhishER), phisher_rules, usb_test_results,
    physical_qr_results, simulation_overview (all campaign and simulation types), admin_audit_log (what admins changed),
    security_coaching (Real-Time Coaching), password_risks (PasswordIQ), user_events (events from other security tools),
-   product_status (which KnowBe4 products are in use).
+   product_status (which KnowBe4 products are in use), modstore_content (ModStore videos and coaching content),
+   templates (phishing email templates, landing pages, notification emails, callback scripts), account_settings (admin roles,
+   Second Chance settings), campaign_settings (how phishing or training campaigns are set up and scheduled).
 5. Person questions: call find_user, then user_risk_summary with the id. "Full" or "selengkapnya" history
    also means user_risk_summary; the raw history is never shown. If several people match,
    list them numbered and ask which one.
@@ -88,6 +90,8 @@ Rules:
     time spent; "terbaik" = sort most_completed) is always training_by_module. For which content the company has, the newest
     ("terbaru": sort newest) or what to recommend, call training_library; recommend only from its facts (new or never assigned).
     training_library is the account's own library, not the whole ModStore catalogue; never present it as ModStore-wide.
+    ModStore questions: call modstore_content when available (ModStore videos and coaching content, with in_library);
+    recommend from its items that are not in_library. ModStore training courses are not listed by the API: say so.
     Training campaigns are not modules; never answer a module question from training_completion_summary.
 22. Benchmark or industry comparisons: call industry_benchmark when it is available (KnowBe4's official figures per
     industry and company size). Emails employees reported as suspicious in real life are reported_emails (PhishER);
@@ -501,6 +505,37 @@ def _without_catalogue_notes(answer: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned)).strip()
 
 
+CAUSE = re.compile(r"\b(?:karena|sebab|disebabkan|akibat|berkat|because|due to|as a result|thanks to|caused by)\b", re.I)
+# reasons the data never holds; a word stays allowed when a tool result or the question has it ("Mandatory Training ...")
+SPECULATIVE = ("wajib", "diwajibkan", "mandatory", "required", "compulsory", "prioritas", "priority", "menarik",
+               "interesting", "engaging", "membosankan", "boring", "sulit", "difficult", "rumit", "complex", "mudah",
+               "easy", "populer", "popular", "relevan", "relevant", "sibuk", "busy", "lupa", "forgot", "malas", "lazy",
+               "motivasi", "motivation", "kesadaran tinggi", "high awareness", "budaya", "culture")
+
+
+def _without_made_up_reasons(answer: str, sources: str) -> str:
+    """a "why" with a cause the data cannot give ("tinggi karena status wajib"): that sentence goes.
+    the first line and table rows stay; the number check cannot see this, it is words"""
+    known = sources.casefold()
+    absent = [w for w in SPECULATIVE if not re.search(rf"\b{re.escape(w)}", known)]
+    if not absent:
+        return answer
+    made_up = re.compile(r"\b(?:" + "|".join(re.escape(w) for w in absent) + r")\w*", re.I)
+    lines = answer.splitlines()
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    out = []
+    for i, line in enumerate(lines):
+        if i == first or line.lstrip().startswith("|") or not (CAUSE.search(line) and made_up.search(line)):
+            out.append(line)
+            continue
+        bullet = re.match(r"^\s*(?:[-*•]|\d+\.)\s+", line)
+        body = line[bullet.end():] if bullet else line
+        kept = [x for x in re.split(r"(?<=[.!?])\s+", body) if not (CAUSE.search(x) and made_up.search(x))]
+        if kept:
+            out.append((bullet.group(0) if bullet else "") + " ".join(kept))
+    return "\n".join(out)
+
+
 def _drop_sentences_with(answer: str, numbers: list[str]) -> str:
     """last resort: remove every sentence that still carries a number the data does not contain"""
     bad = re.compile(r"(?<![A-Za-z\d.,])(" + "|".join(re.escape(n) for n in numbers) + r")(?![\d])")
@@ -606,6 +641,20 @@ GROUP_WORD = r"\b(?:grup\w*|groups?|kelompok\w*|divisi\w*|departemen\w*|departme
 TREND_WORD = (r"\b(?:tren\w*|trend\w*|dari waktu ke waktu|over time|membaik|memburuk|getting (?:better|worse)|improv\w*"
               r"|riwayat|history|naik|turun|perkembangan)\b")
 TOPIC_TOOLS = (
+    # before the library: with the coaching key, modstore questions get the catalogue, not only what the account has
+    (MODSTORE_ASK, "modstore_content", {"modstore_content"}),
+    # before callback, new joiners and modules: "skrip callback", "auto-enrol new users" and "jadwal" are settings questions
+    (re.compile(r"\b(?:templat\w*|templates?|landing ?pages?|halaman landing|email notifikasi|notification emails?|"
+                r"skrip (?:telepon|callback)|callback scripts?)\b", re.I),
+     # "which template got the most clicks" is a results question: those tools answer it
+     "templates", {"templates", "phishing_test_detail", "phishing_campaign_summary", "simulation_overview"}),
+    (re.compile(r"\b(?:role|roles|peran admin|hak akses|akses admin|permissions?|izin admin|second chance)\b", re.I),
+     "account_settings", {"account_settings"}),
+    # "kapan terakhir dijalankan" once went to the raw campaign list (oldest first) and got July 2024 for an October 2026 run
+    (re.compile(r"\b(?:jadwal\w*|schedul\w*|berulang|recurring|next run|jalan berikutnya|jam kerja|business hours|auto[- ]?enrol\w*|"
+                r"pengaturan (?:kampanye|campaign)|campaign settings?|setting (?:kampanye|campaign)|"
+                r"terakhir (?:di)?jalan\w*|(?:di)?jalankan terakhir|last (?:run|ran)|ran last|last (?:phishing )?campaign ran)\b", re.I),
+     "campaign_settings", {"campaign_settings"}),
     (re.compile(MODSTORE_ASK.pattern + r"|\b(?:apa saja|daftar|list|punya|tersedia|available|library|pustaka|katalog|catalog|dibeli|purchased|"
                 r"terbaru|newest|latest|rekomendasi\w*|recommend\w*)\b"
                 r"[^.?!]{0,40}\b(?:modul\w*|modules?|konten|content|materi|video\w*|courses?|kursus)\b"
@@ -725,7 +774,8 @@ PERIOD_TOOLS = {
 PRODUCT_TOOLS = {
     "industry_benchmark": "ksat", "usb_test_results": "ksat", "physical_qr_results": "ksat", "simulation_overview": "ksat",
     "admin_audit_log": "ksat", "reported_emails": "phisher", "phisher_rules": "phisher", "security_coaching": "coach",
-    "password_risks": "piq", "user_events": "events",
+    "password_risks": "piq", "user_events": "events", "modstore_content": "coach", "templates": "ksat",
+    "account_settings": "ksat", "campaign_settings": "ksat",
 }
 # current status, not something that happened in a period: the default year is not applied
 NO_DEFAULT_PERIOD = {"overdue_training", "training_by_module", "training_library"}
@@ -1343,6 +1393,9 @@ class Agent:
                         answer = _with_library_line(answer, state["libraries"][0], language)
                     if len(state.get("libraries") or []) == 1:
                         answer = _with_library_order(answer, state["libraries"][0])
+                    if state.get("data_tools"):
+                        tool_text = " ".join(str(m.get("content") or "") for m in messages if m.get("role") == "tool")
+                        answer = _without_made_up_reasons(answer, f"{prompt} {tool_text}")
                     answer = _fix_levels(answer)
                     if language == "id":
                         answer = _fix_typos_in_answer(answer)
@@ -1370,8 +1423,11 @@ class Agent:
                     if (fresh := state.get("fresh")) and state.get("kb4_data") and answer.strip():
                         note = msg("fresh_data", language) if fresh["refreshed"] or fresh["age"] is None else msg("fresh_recent", language, seconds=fresh["age"])
                         answer = f"{answer.strip()}\n\n*{note}*"
-                    if MODSTORE_ASK.search(prompt) and state.get("training_library") and state.get("kb4_data") and answer.strip():
-                        answer = f"{_without_catalogue_notes(answer)}\n\n*{msg('modstore_scope', language)}*"
+                    if MODSTORE_ASK.search(prompt) and state.get("kb4_data") and answer.strip():
+                        # the catalogue read: say what it covers; only the library read: say the catalogue was not
+                        scope = "modstore_media_scope" if state.get("modstore_content") else "modstore_scope" if state.get("training_library") else None
+                        if scope:
+                            answer = f"{_without_catalogue_notes(answer)}\n\n*{msg(scope, language)}*"
                     answer = answer.strip() or msg("no_answer", language)
                     print("[AGENT] Final answer generated", flush=True)
                     notes = state.get("notes") or []

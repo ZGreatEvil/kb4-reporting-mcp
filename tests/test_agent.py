@@ -1350,7 +1350,8 @@ async def test_latest_item_is_not_a_refresh(monkeypatch, prompt):
 
 
 PRODUCT_TOOL_NAMES = ["industry_benchmark", "reported_emails", "phisher_rules", "usb_test_results", "physical_qr_results",
-                      "simulation_overview", "admin_audit_log", "security_coaching", "password_risks", "user_events", "product_status"]
+                      "simulation_overview", "admin_audit_log", "security_coaching", "password_risks", "user_events", "product_status",
+                      "modstore_content", "templates", "account_settings", "campaign_settings"]
 
 
 def product_config(monkeypatch, **keys):
@@ -1699,3 +1700,95 @@ async def test_catalogue_notes_only_go_on_modstore_questions(monkeypatch):
     ])
     answer = await make_agent(make_config(monkeypatch), llm, topic_session()).ask("konten training apa saja yang kita punya?")
     assert "Konten ini dibeli dari ModStore." in answer
+
+
+def test_made_up_reasons_are_dropped():
+    # live: "penyelesaian tinggi karena status wajib" where nothing in the data says mandatory
+    from agent.agent import _without_made_up_reasons
+    answer = ("**Modul terbaik: Kebijakan A.**\n\n**Kenapa**\n- Kebijakan A tinggi karena status wajib. Hanya 1 peserta.\n"
+              "- Banyak yang belum mulai karena sibuk.\n- 6 dari 7 belum mulai karena belum ditugaskan.")
+    data = '{"facts": ["only 1 enrolled"], "not_started": 6}'
+    fixed = _without_made_up_reasons(answer, data)
+    assert "wajib" not in fixed and "sibuk" not in fixed
+    assert "- Hanya 1 peserta." in fixed and "karena belum ditugaskan" in fixed
+    # the word is in the data (a module title): the sentence stays
+    titled = _without_made_up_reasons(answer, data + ' "Mandatory Wajib Policy"')
+    assert "status wajib" in titled
+    # a first line is never touched
+    assert _without_made_up_reasons("**Tinggi karena wajib.**", data) == "**Tinggi karena wajib.**"
+
+
+@pytest.mark.parametrize("prompt,tool", [
+    ("rekomendasikan video dari modstore", "modstore_content"),
+    ("what's new in ModStore?", "modstore_content"),
+    ("template phishing knowbe4 tentang invoice ada berapa?", "templates"),
+    ("landing page apa saja yang tersedia?", "templates"),
+    ("siapa saja yang punya role admin?", "account_settings"),
+    ("pengaturan second chance gimana?", "account_settings"),
+    ("kampanye phishing mana yang jadwal berikutnya paling dekat?", "campaign_settings"),
+    ("which training campaigns auto-enrol new users?", "campaign_settings"),
+])
+async def test_new_product_questions_reach_their_tool(monkeypatch, prompt, tool):
+    session = product_session()
+    config = product_config(monkeypatch, ksat="t", phisher="t", piq="t", coach="t", events="t")
+    llm = FakeLLM([reply("**Tanpa data.**"), reply("**Dari data.**")])
+    await make_agent(config, llm, session).ask(prompt)
+    assert tool in [c[0] for c in session.calls]
+
+
+async def test_a_template_results_question_is_not_forced_to_the_library(monkeypatch):
+    # "which template got the most clicks" is answered by the test results
+    session = product_session()
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "phishing_test_detail", '{"console": "main"}')], finish="tool_calls"),
+        reply("**Template dengan klik terbanyak ada di tes terakhir.**"),
+    ])
+    config = product_config(monkeypatch, ksat="t")
+    await make_agent(config, llm, session).ask("template phishing mana yang paling banyak diklik?")
+    assert "templates" not in [c[0] for c in session.calls]
+
+
+@pytest.mark.parametrize("language", ["id", "en"])
+async def test_modstore_catalogue_answer_says_what_it_covers(monkeypatch, language):
+    session = product_session()
+    llm = FakeLLM([
+        reply(calls=[tool_call("c1", "modstore_content", '{"console": "main"}')], finish="tool_calls"),
+        reply("**ModStore punya video baru.**\n\nCatatan: katalog ModStore lengkap perlu akses tim."),
+        reply("**ModStore punya video baru.**\n\nCatatan: katalog ModStore lengkap perlu akses tim."),
+    ])
+    answer = await make_agent(product_config(monkeypatch, coach="t"), llm, session).ask("what's new in ModStore?", language)
+    assert answer.endswith("*" + msg("modstore_media_scope", language) + "*")
+    assert msg("modstore_scope", language) not in answer and "akses tim" not in answer
+
+
+async def test_modstore_without_the_coaching_key_falls_back_to_the_library(monkeypatch):
+    session = product_session()
+    llm = FakeLLM([reply("**Tanpa data.**"), reply("**Dari library.**")])
+    answer = await make_agent(product_config(monkeypatch, ksat="t"), llm, session).ask("rekomendasikan modul dari modstore")
+    called = [c[0] for c in session.calls]
+    assert "modstore_content" not in called and "training_library" in called
+    assert answer.endswith("*" + msg("modstore_scope", "id") + "*")
+
+
+async def test_new_product_tools_follow_their_keys(monkeypatch):
+    llm = FakeLLM([reply("**ok**")])
+    await make_agent(product_config(monkeypatch, ksat="t"), llm, product_session()).ask("hai")
+    offered = {t["function"]["name"] for t in llm.requests[0]["tools"]}
+    assert {"templates", "account_settings", "campaign_settings"} <= offered and "modstore_content" not in offered
+
+
+async def test_callback_scripts_are_templates_not_results(monkeypatch):
+    session = product_session()
+    llm = FakeLLM([reply("**Tanpa data.**"), reply("**Dari data.**")])
+    await make_agent(product_config(monkeypatch, ksat="t"), llm, session).ask("skrip callback dari knowbe4 ada berapa?")
+    called = [c[0] for c in session.calls]
+    assert "templates" in called and "callback_phishing_summary" not in called
+
+
+@pytest.mark.parametrize("prompt", ["kapan kampanye phishing terakhir dijalankan?", "when was the last phishing campaign ran?"])
+async def test_last_run_questions_use_the_campaign_settings(monkeypatch, prompt):
+    session = product_session()
+    llm = FakeLLM([reply(calls=[tool_call("c1", "list_phishing_campaigns", '{"console": "main", "max_records": 10}')], finish="tool_calls"),
+                   reply("**Terakhir Juli 2024.**"), reply("**Dari pengaturan kampanye.**")])
+    await make_agent(product_config(monkeypatch, ksat="t"), llm, session).ask(prompt)
+    assert "campaign_settings" in [c[0] for c in session.calls]
