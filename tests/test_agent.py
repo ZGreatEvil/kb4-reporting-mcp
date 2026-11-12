@@ -2206,9 +2206,9 @@ async def test_phishing_per_group_table_and_checks(monkeypatch):
     ("group_members", {"group": "IT", "members": [{"name": "Ana A", "email": "ana@example.com", "risk_score": 50.0, "risk_level": "High",
                                                     "phish_prone_percent": 25.0, "past_due_training": 1}], "total": 3},
      ["| 1 | Ana A | ana@example.com | 50 | High | 25% | 1 |", msg("breakdown_more", "id", n=2)]),
-    ("campaign_people", {"people": [{"name": "Ana A", "email": "ana@example.com", "status": "Past Due",
+    ("campaign_people", {"people": [{"name": "Ana A", "email": "ana@example.com", "groups": ["IT", "HR"], "status": "Past Due",
                                      "modules": [{"module": "M1", "status": "Passed"}, {"module": "M2", "status": "Past Due"}]}], "total": 1},
-     ["| 1 | Ana A | ana@example.com | Past Due | M1 (Passed); M2 (Past Due) |"]),
+     ["| 1 | Ana A | ana@example.com | IT; HR | Past Due | M1 (Passed); M2 (Past Due) |"]),
     ("person_training", {"enrolments": [{"campaign": "Onboarding", "module": "M1", "status": "Passed", "enrolled": "2026-09-02",
                                          "completed": "2026-09-10", "minutes": 10.5}]},
      ["| Onboarding | M1 | Passed | 2026-09-02 | 2026-09-10 | 10,5 |"]),
@@ -2423,3 +2423,85 @@ def test_the_comparison_topic_needs_a_time_word(prompt, compare):
     from agent.agent import TOPIC_TOOLS
     topic = next(t for t in TOPIC_TOOLS if t[1] == "compare_periods")
     assert bool(topic[0].search(prompt)) is compare
+
+
+
+@pytest.mark.parametrize("question,expected", [
+    ("tarik data campaign 2026-10-07 untuk grup IT, berapa user complete, in progress, past due, tarik usernya juga dan export csv", "all"),
+    ("export csv siapa saja yang past due di campaign onboarding", "past_due"),
+    ("export ke excel daftar orang yang belum selesai campaign 2026-10-07", "unfinished"),
+    ("export the people who have not started the onboarding campaign to csv", "not_started"),
+    ("pull the users too and export to csv: how many unfinished and completed in the 2026-10-07 campaign", "all"),
+])
+def test_people_status_from_the_question(question, expected):
+    from agent.agent import _people_status, _wants_people_file
+    assert _wants_people_file(question) and _people_status(question) == expected
+
+
+@pytest.mark.parametrize("question", [
+    "export csv berapa user complete per grup di campaign 2026-10-07",   # a count: the per-group file
+    "export semua pengguna ke csv",                                      # no campaign: the users file
+    "siapa saja yang past due di campaign onboarding?",                  # no file asked
+    "export csv siapa yang klik phishing campaign 2026-10-07",           # phishing, not training
+])
+def test_no_people_file_for_these(question):
+    from agent.agent import _wants_people_file
+    assert not _wants_people_file(question)
+
+
+async def test_people_export_replaces_the_group_counts_file(monkeypatch):
+    made = {"dataset": "campaign_people", "rows": 3, "download_url": "/exports/" + "e" * 32 + ".csv?name=p.csv", "file_name": "p.csv"}
+    session = breakdown_session({"export_csv": made})
+    session.tools.append(SimpleNamespace(name="export_csv", description="d", input_schema={"type": "object"}))
+    llm = FakeLLM([reply(calls=[tool_call("x", "export_csv", '{"console": "main", "dataset": "training_by_group", "include_archived": true}')],
+                         finish="tool_calls"),
+                   # group + status: the counts per group come too, from training_by_group (made in code)
+                   reply("**File berisi 3 orang.**"), reply("**File berisi 3 orang.**")])
+    question = "campaign 2026-10-07 grup IT: siapa saja yang past due, export csv"
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask(question)
+    call = next(args for name, args in session.calls if name == "export_csv")
+    assert call["dataset"] == "campaign_people" and call["status"] == "past_due" and call["campaign_date"] == "2026-10-07"
+    # the (normalised) question goes along for the group names; archived only when the question asks
+    assert "grup it" in call["text"].casefold() and call["include_archived"] is False
+    assert "/exports/" + "e" * 32 in answer
+
+
+async def test_people_export_is_made_in_code_when_the_model_skips_it(monkeypatch):
+    made = {"dataset": "campaign_people", "rows": 3, "download_url": "/exports/" + "f" * 32 + ".csv?name=p.csv", "file_name": "p.csv"}
+    session = breakdown_session({"export_csv": made})
+    session.tools.append(SimpleNamespace(name="export_csv", description="d", input_schema={"type": "object"}))
+    llm = FakeLLM([reply("File CSV sudah dibuat."), reply("**File berisi 3 orang.**")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("export ke csv daftar orang di campaign 2026-10-07 termasuk arsip")
+    call = next(args for name, args in session.calls if name == "export_csv")
+    assert call["dataset"] == "campaign_people" and call["status"] == "all" and call["include_archived"] is True
+    assert "/exports/" + "f" * 32 in answer
+
+
+
+@pytest.mark.parametrize("question,by", [
+    ("campaign 2026-10-07 untuk grup IT berapa user complete, in progress, past due", "user"),
+    ("campaign 2026-10-07 untuk grup IT berapa enrolmen yang complete", "enrolment"),
+])
+async def test_group_training_counts_people_unless_enrolments_are_asked(monkeypatch, question, by):
+    # live: the model passed by=enrolment for "berapa user" and got 1,890 enrolments instead of 944 people
+    session = breakdown_session()
+    llm = FakeLLM([reply(calls=[tool_call("t", "training_by_group", '{"console": "main", "by": "enrolment"}')], finish="tool_calls"),
+                   reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(question)
+    assert next(args for name, args in session.calls if name == "training_by_group")["by"] == by
+
+
+
+@pytest.mark.parametrize("prompt,args,expected", [
+    # the model's own campaign name from the headline: dropped, the day picks
+    ("campaign 2026-10-07 grup IT, export csv usernya", {"campaign": "Awareness Training (4 campaigns)"}, {"campaign_date": "2026-10-07"}),
+    ("campaign 2026-10-07 grup IT", {"campaign": "123"}, {"campaign_date": "2026-10-07"}),
+    # a name the question holds stays
+    ("campaign onboarding 2026-10-07", {"campaign": "Onboarding"}, {"campaign": "Onboarding", "campaign_date": "2026-10-07"}),
+    # no date in the question ("1" after a list of choices): the model's pick stays
+    ("1", {"campaign": "123"}, {"campaign": "123"}),
+])
+def test_a_dated_question_picks_its_campaigns_by_day(prompt, args, expected):
+    from agent.agent import _campaign_from_question
+    _campaign_from_question(args, prompt)
+    assert args == expected

@@ -131,17 +131,21 @@ async def phishing_by_group(
 # ---------------------------------------------------------------- who is behind in a campaign
 
 PEOPLE_STATUSES = {"past_due": "Past Due", "not_started": "Not Started", "in_progress": "In Progress", "completed": "Passed"}
+# everyone who has not finished: past due, not started and in progress together ("yang belum selesai")
+UNFINISHED = "unfinished"
 
 
-async def campaign_people(
+async def campaign_people_rows(
     kb: Any, console: str, campaign: str | None = None, campaign_date: str | None = None, groups: Any = None,
-    status: str = "past_due", text: str | None = None, include_archived: bool = False, limit: int = PEOPLE_LIMIT,
+    status: str = "past_due", text: str | None = None, include_archived: bool = False,
 ) -> dict[str, Any]:
-    """the people behind the numbers of one training campaign: who is Past Due, not started, in progress or done"""
+    """every matching person of the campaign, unlimited: {"rows", "picked", "resolved", "unknown", "status"}, or an error /
+    ask-which result to return as it is. the chat tool shows the first rows, the csv export writes them all"""
     status = (status or "past_due").strip().lower().replace(" ", "_")
-    if status not in (*PEOPLE_STATUSES, "all"):
-        return {"console": console, "error": True, "message": f"status must be one of {', '.join([*PEOPLE_STATUSES, 'all'])}."}
-    _, resolved, unknown = await _named_groups(kb, console, groups, text)
+    allowed = (*PEOPLE_STATUSES, UNFINISHED, "all")
+    if status not in allowed:
+        return {"console": console, "error": True, "message": f"status must be one of {', '.join(allowed)}."}
+    all_groups, resolved, unknown = await _named_groups(kb, console, groups, text)
     chosen = await _pick_campaigns(kb, console, campaign, campaign_date, resolved)
     if "picked" not in chosen:
         return chosen
@@ -153,35 +157,60 @@ async def campaign_people(
         if e.get("campaign_id") in camp_ids:
             per_user.setdefault((e.get("user") or {}).get("id"), []).append(e)
     wanted_ids = {g.get("id") for g in resolved}
+    group_name = {g.get("id"): str(g.get("name") or "") for g in all_groups}
     rows = []
     for uid, enrolments in per_user.items():
         user = people.get(uid)
         if not _active(user, include_archived):
             continue
-        if wanted_ids and not wanted_ids & set(user.get("groups") or []):
+        member_of = list(user.get("groups") or [])
+        if wanted_ids and not wanted_ids & set(member_of):
             continue
         worst = max((str(e.get("status") or "") for e in enrolments), key=lambda s: STATUS_RANK.get(s, 1))
         column = STATUS_COLUMN.get(worst, "other")
-        if status != "all" and column != status:
+        if status == UNFINISHED and column == "completed" or status not in ("all", UNFINISHED) and column != status:
             continue
-        rows.append({"name": _name(user), "email": user.get("email"), "status": worst,
+        # only the named groups when some were named (a person in two of them shows both), else every group they are in
+        shown = [g for g in member_of if g in wanted_ids] if wanted_ids else member_of
+        done = [e for e in enrolments if STATUS_COLUMN.get(str(e.get("status") or "")) == "completed"]
+        dates = sorted(d for e in done if (d := _date(e.get("completion_date"))))
+        rows.append({"name": _name(user), "email": user.get("email"),
+                     "groups": [group_name[g] for g in shown if group_name.get(g)],
+                     "status": worst, "modules_completed": len(done), "modules_enrolled": len(enrolments),
+                     # the day the last module was finished, only once all are
+                     "completed_on": dates[-1] if dates and len(done) == len(enrolments) else None,
+                     "archived": user.get("status") == "archived",
                      "modules": [{"module": e.get("module_name"), "status": e.get("status"), "completed": _date(e.get("completion_date")) or None}
                                  for e in enrolments]})
     rows.sort(key=lambda r: (str(r["status"]), r["name"].casefold()))
-    label = {"all": "enrolled"}.get(status, PEOPLE_STATUSES.get(status, status))
+    return {"rows": rows, "picked": picked, "resolved": resolved, "unknown": unknown, "status": status}
+
+
+async def campaign_people(
+    kb: Any, console: str, campaign: str | None = None, campaign_date: str | None = None, groups: Any = None,
+    status: str = "past_due", text: str | None = None, include_archived: bool = False, limit: int = PEOPLE_LIMIT,
+) -> dict[str, Any]:
+    """the people behind the numbers of one training campaign: who is Past Due, not started, in progress or done"""
+    found = await campaign_people_rows(kb, console, campaign, campaign_date, groups, status, text, include_archived)
+    if "rows" not in found:
+        return found
+    rows, picked, resolved, status = found["rows"], found["picked"], found["resolved"], found["status"]
+    label = {"all": "enrolled", UNFINISHED: "not finished"}.get(status, PEOPLE_STATUSES.get(status, status))
     names = " + ".join(str(c.get("name") or "").strip() for c in picked)
     in_groups = f" in {', '.join(g.get('name') for g in resolved)}" if resolved else ""
+    camp_ids = sorted({c.get("campaign_id") for c in picked})
     return {
         "console": console,
-        "campaign": {"campaign_ids": sorted(camp_ids), "name": names, "start_date": _date(picked[0].get("start_date"))},
+        "campaign": {"campaign_ids": camp_ids, "name": names, "start_date": _date(picked[0].get("start_date"))},
         "status": status,
         "headline": f"{names} ({_date(picked[0].get('start_date'))}): {len(rows)} people{in_groups} are {label}.",
-        "people": rows[: _limit(limit, PEOPLE_LIMIT)],
+        "people": [{k: v for k, v in r.items() if k != "archived"} for r in rows[: _limit(limit, PEOPLE_LIMIT)]],
         "total": len(rows),
         "shown": min(len(rows), _limit(limit, PEOPLE_LIMIT)),
-        "unknown_groups": unknown,
+        "unknown_groups": found["unknown"],
         "rule": "a person's status is their least finished module in this campaign",
-        "note": "The list is added to the answer automatically as a table; summarise it. " + NO_ADVICE,
+        "note": ("The list is added to the answer automatically as a table; summarise it. For every person in a file, "
+                 "export_csv with dataset campaign_people. " + NO_ADVICE),
     }
 
 

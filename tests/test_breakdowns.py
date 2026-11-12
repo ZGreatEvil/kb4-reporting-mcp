@@ -122,6 +122,55 @@ async def test_campaign_people_narrowed_to_a_group_and_bad_status():
     assert bad["error"] is True and "status must be one of" in bad["message"]
 
 
+async def test_campaign_people_rows_carry_groups_and_module_counts():
+    every = await breakdowns.campaign_people(FakeKB(), "main", campaign="7", status="all")
+    rows = {p["name"]: p for p in every["people"]}
+    # no group named: every group the person is in; Budi is in IT and HR
+    assert rows["Budi B"]["groups"] == ["IT", "HR"] and rows["Budi B"]["completed_on"] == "2026-09-10"
+    assert rows["Ana A"]["modules_completed"] == 1 and rows["Ana A"]["modules_enrolled"] == 2 and rows["Ana A"]["completed_on"] is None
+    # group 99 has no name in the group list: left out rather than shown as a number
+    assert rows["Citra C"]["groups"] == ["HR"] and "archived" not in rows["Citra C"]
+    hr = await breakdowns.campaign_people(FakeKB(), "main", campaign="7", status="all", text="grup HR")
+    assert [p["groups"] for p in hr["people"]] == [["HR"], ["HR"]]  # Budi and Citra, only the named group
+
+
+async def test_campaign_people_unfinished_is_everyone_not_done():
+    r = await breakdowns.campaign_people(FakeKB(), "main", campaign="7", status="unfinished")
+    assert sorted(p["name"] for p in r["people"]) == ["Ana A", "Citra C"] and r["headline"].endswith("2 people are not finished.")
+
+
+async def test_people_csv_has_every_person_with_groups(tmp_path, monkeypatch):
+    import csv
+
+    from kb4_mcp import outputs
+    monkeypatch.setattr(outputs, "EXPORT_DIR", tmp_path)
+    monkeypatch.setattr(breakdowns, "PEOPLE_LIMIT", 1)   # the chat cap does not apply to the file
+    r = await outputs.export_csv(FakeKB(), "main", "campaign_people", campaign="7")
+    assert r["status_filter"] == "all" and r["rows"] == 3 and r["campaign"] == "Onboarding"
+    # the default past-year period does not filter a campaign's people, so it is not reported as if it did
+    assert r["period"] == "the campaign's own people (no period filter)"
+    path = tmp_path / r["download_url"].split("/")[-1].split("?")[0]
+    rows = list(csv.reader(path.read_text(encoding="utf-8-sig").splitlines()))
+    assert rows[0] == ["name", "email", "groups", "status", "modules_completed", "modules_enrolled", "completed_on", "campaign", "modules"]
+    by_name = {row[0]: row for row in rows[1:]}
+    assert by_name["Budi B"][2] == "IT; HR" and by_name["Budi B"][3] == "Passed" and by_name["Budi B"][6] == "2026-09-10"
+    assert by_name["Ana A"][4:6] == ["1", "2"] and by_name["Ana A"][8] == "M1 (Passed); M2 (Past Due)"
+    # archived people only when asked, and marked
+    archived = await outputs.export_csv(FakeKB(), "main", "campaign_people", campaign="7", include_archived=True)
+    path = tmp_path / archived["download_url"].split("/")[-1].split("?")[0]
+    assert "Past Due (archived)" in path.read_text(encoding="utf-8-sig") and archived["rows"] == 4
+    only_late = await outputs.export_csv(FakeKB(), "main", "campaign_people", campaign="7", status="past_due")
+    assert only_late["rows"] == 1 and only_late["status_filter"] == "past_due"
+
+
+@pytest.mark.parametrize("args,key", [({"campaign": "no such campaign"}, "error"), ({"campaign": "7", "status": "lost"}, "error")])
+async def test_people_csv_bad_input_makes_no_file(tmp_path, monkeypatch, args, key):
+    from kb4_mcp import outputs
+    monkeypatch.setattr(outputs, "EXPORT_DIR", tmp_path)
+    r = await outputs.export_csv(FakeKB(), "main", "campaign_people", **args)
+    assert r.get(key) is True and "download_url" not in r and not list(tmp_path.iterdir())
+
+
 # ---------------------------------------------------------------- group members
 
 async def test_group_members_sorted_by_risk_with_late_training():

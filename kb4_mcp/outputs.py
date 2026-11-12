@@ -18,6 +18,7 @@ import matplotlib
 matplotlib.use("Agg")  # no window, safe in a server process
 import matplotlib.pyplot as plt  # noqa: E402
 
+from kb4_mcp.breakdowns import campaign_people_rows  # noqa: E402
 from kb4_mcp.products import _all_messages, reported_emails  # noqa: E402
 from kb4_mcp.summaries import (  # noqa: E402
     _bad_period,
@@ -43,7 +44,8 @@ CHARTS = ("risk_trend", "users_by_level", "top_users", "phishing_tests", "traini
           "reported_emails")
 # charts of data over time; the others show today's state, which has no period
 PERIOD_CHARTS = {"risk_trend", "phishing_tests", "training_completion", "group_trend", "reported_emails"}
-DATASETS = ("users", "phishing_tests", "training_campaigns", "risk_history", "modules", "reported_emails", "training_by_group")
+DATASETS = ("users", "phishing_tests", "training_campaigns", "risk_history", "modules", "reported_emails", "training_by_group",
+            "campaign_people")
 
 LEVEL_ORDER = ["Low", "Medium", "High", "Critical"]
 LEVEL_COLOURS = {"Low": "#16a34a", "Medium": "#f59e0b", "High": "#ea580c", "Critical": "#dc2626"}
@@ -327,7 +329,7 @@ def _cell(value: Any) -> Any:
 async def export_csv(
     kb: Any, console: str, dataset: str, user_id: int | None = None, status: str = "active",
     start_date: str | None = None, end_date: str | None = None, campaign: str | None = None, campaign_date: str | None = None,
-    groups: str | None = None, text: str | None = None,
+    groups: str | None = None, text: str | None = None, include_archived: bool = False,
 ) -> dict[str, Any]:
     if problem := _bad_period(start_date, end_date):
         return {"error": True, "message": problem}
@@ -362,7 +364,7 @@ async def export_csv(
         rows = [[m["module"], m["type"], m["enrolled"], m["passed"], m["past_due"], m["in_progress"], m["not_started"],
                  m["completion_percent"], m["typical_minutes"]] for m in data.get("modules", [])]
     elif dataset == "training_by_group":
-        data = await training_by_group(kb, console, campaign, campaign_date, groups, "user", text)
+        data = await training_by_group(kb, console, campaign, campaign_date, groups, "user", text, include_archived)
         if data.get("error") or data.get("ask_user"):
             return data
         header = ["group", "people", "completed", "in_progress", "not_started", "past_due", "percent_complete", "archived_not_counted"]
@@ -371,6 +373,17 @@ async def export_csv(
         t = data["totals"]
         rows.append(["Total (each person once)", t["total"], t["completed"], t["in_progress"], t["not_started"], t["past_due"],
                      t["percent_complete"], data.get("archived_not_counted", 0)])
+    elif dataset == "campaign_people":
+        # one row per person, every person: "active" is the users dataset's default, so it means everyone here
+        found = await campaign_people_rows(kb, console, campaign, campaign_date, groups,
+                                           "all" if status in ("", "active") else status, text, include_archived)
+        if "rows" not in found:
+            return found
+        header = ["name", "email", "groups", "status", "modules_completed", "modules_enrolled", "completed_on", "campaign", "modules"]
+        names = " + ".join(str(c.get("name") or "").strip() for c in found["picked"])
+        rows = [[r["name"], r["email"], "; ".join(r["groups"]), r["status"] + (" (archived)" if r["archived"] else ""),
+                 r["modules_completed"], r["modules_enrolled"], r["completed_on"], names,
+                 "; ".join(f"{m.get('module')} ({m.get('status')})" for m in r["modules"])] for r in found["rows"]]
     elif dataset == "reported_emails":
         messages, _ = await _all_messages(kb, console)
         header = ["reported_at", "subject", "from", "reported_by", "category", "severity", "status"]
@@ -397,7 +410,11 @@ async def export_csv(
     return {
         "dataset": dataset,
         **({"status_filter": status or "all"} if dataset == "users" else {}),
-        "period": (_period_label(start_date, end_date) or "all data") if dataset != "users" else "today's users (no period)",
+        **({"status_filter": found["status"], "campaign": names} if dataset == "campaign_people" else {}),
+        # a campaign file holds that campaign's people, whatever the default period was
+        "period": ("today's users (no period)" if dataset == "users" else
+                   "the campaign's own people (no period filter)" if dataset in ("training_by_group", "campaign_people") else
+                   _period_label(start_date, end_date) or "all data"),
         "rows": len(rows),
         "columns": header,
         "download_url": url,

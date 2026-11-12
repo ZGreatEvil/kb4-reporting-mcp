@@ -685,7 +685,7 @@ BREAKDOWN_TABLES = {
     "phishing_by_group": ("groups", lambda r, n: [r.get("group"), n(r.get("delivered")), n(r.get("failed")), n(r.get("clicked")),
                                                   n(r.get("entered_data")), n(r.get("opened_attachment")), n(r.get("reported")),
                                                   n(r.get("failure_percent"), "%"), n(r.get("report_percent"), "%")]),
-    "campaign_people": ("people", lambda r, n: [None, r.get("name"), r.get("email"), r.get("status"),
+    "campaign_people": ("people", lambda r, n: [None, r.get("name"), r.get("email"), "; ".join(r.get("groups") or []), r.get("status"),
                                                 "; ".join(f"{m.get('module')} ({m.get('status')})" for m in r.get("modules") or [])]),
     "group_members": ("members", lambda r, n: [None, r.get("name"), r.get("email"), n(r.get("risk_score")), r.get("risk_level"),
                                                n(r.get("phish_prone_percent"), "%"), n(r.get("past_due_training"))]),
@@ -1291,6 +1291,55 @@ CHART_FOR_TOOL = (
 )
 CHART_ASK = re.compile(r"\b(grafik\w*|chart\w*|graph\w*|diagram\w*|visuali[sz]\w*|plot\w*)\b", re.I)
 EXPORT_ASK = re.compile(r"\b(export\w*|ekspor\w*|csv|excel|unduh\w*|download\w*)\b", re.I)
+# the people themselves, not a count: "berapa user complete" is a count, "tarik usernya juga" / "siapa saja" a list
+PEOPLE_LIST_ASK = re.compile(
+    r"\b(?:siapa\w*|nama\w*|daftar\w*|list\w*|who|people|orang-?orang\w*|user-?user\w*|usernya|orangnya|karyawannya|pesertanya|"
+    r"per[- ](?:users?|orang|person|karyawan|peserta|people)|masing-masing|setiap (?:users?|orang|karyawan|peserta)|"
+    r"each (?:users?|person)|(?:pull|tarik|ambil|include|sertakan|termasuk|with|dengan|plus) (?:the |semua |all |para )?"
+    r"(?:users?|orang|karyawan|peserta)|(?:users?|orang|karyawan|peserta) (?:juga|too|also)|(?:semua|all) (?:users?|karyawan|peserta))\b",
+    re.I)
+CAMPAIGN_WORD = re.compile(r"\b(?:campaigns?|kampanye\w*)\b", re.I)
+# counted per enrolment only when the question says so; "berapa user complete" got 1,890 enrolments instead of 944 people
+ENROLMENT_ASK = re.compile(r"\b(?:enrol\w*|enroll\w*|pendaftaran|per modul|per module)\b", re.I)
+# one status named in the question filters the per-person file; none or several: everyone
+UNFINISHED_WORD = re.compile(r"\b(?:belum (?:selesai|complete\w*|beres|lulus|tuntas)|unfinished|incomplete|outstanding|"
+                             r"not (?:yet )?(?:finished|completed?|done))\b", re.I)
+PEOPLE_STATUS_WORDS = (
+    ("past_due", r"\b(?:past ?due|overdue|terlambat|telat|lewat (?:batas|deadline))\b"),
+    ("not_started", r"\b(?:belum (?:mulai|dimulai|start\w*)|not started|haven'?t started|not_started)\b"),
+    ("in_progress", r"\b(?:in ?progress|on ?progress|sedang (?:berjalan|dikerjakan)|masih (?:dikerjakan|berjalan|proses))\b"),
+    ("completed", r"\b(?:complete[ds]?|selesai|lulus|passed|finished|done|sudah (?:beres|tuntas))\b"),
+)
+
+
+def _people_status(text: str) -> str:
+    """the status filter of a per-person export, from the question's own words"""
+    rest = UNFINISHED_WORD.sub(" ", text)
+    named = [key for key, pattern in PEOPLE_STATUS_WORDS if re.search(pattern, rest, re.I)]
+    if UNFINISHED_WORD.search(text):
+        return "unfinished" if not named else "all"
+    return named[0] if len(named) == 1 else "all"
+
+
+def _campaign_from_question(args: dict[str, Any], prompt: str) -> None:
+    """a dated question picks its campaigns by that day. a campaign name or id the model added that the question does not
+    hold ("Security Awareness Training 1st (4 campaigns)" from the headline) made the day ambiguous: the model then
+    exported one of the four campaigns, 775 people instead of 944"""
+    day = _question_date(prompt)
+    if not day:
+        return
+    if not args.get("campaign_date"):
+        args["campaign_date"] = day
+    words = re.findall(r"\w+", str(args.get("campaign") or "").casefold())
+    asked = set(re.findall(r"\w+", prompt.casefold()))
+    if words and not all(w in asked for w in words):
+        args.pop("campaign", None)
+
+
+def _wants_people_file(text: str) -> bool:
+    """a csv of the people in one training campaign: the model picked the per-group counts file or the users list"""
+    return bool(EXPORT_ASK.search(text) and PEOPLE_LIST_ASK.search(text) and not PHISHING_TOPIC.search(text)
+                and (CAMPAIGN_WORD.search(text) or _question_date(text)))
 PRONOUN = re.compile(r"\b(dia|nya|beliau|him|her|his|their|them)\b|\w+nya\b", re.I)
 LAST_PERSON = re.compile(r"user_risk_summary [^;\]]*\(id (\d+)\)")
 # exports and charts mention "semua pengguna" too, but are not page requests
@@ -1481,17 +1530,24 @@ class Agent:
         if name in ("phishing_by_group", "campaign_people", "group_members"):
             # names of groups (and the campaign's day) come from the question itself
             args["text"] = state.get("prompt", "")
-            if name == "campaign_people" and not args.get("campaign_date") and (day := _question_date(state.get("prompt", ""))):
-                args["campaign_date"] = day
+            if name == "campaign_people":
+                _campaign_from_question(args, state.get("prompt", ""))
             if name != "group_members":
                 args["include_archived"] = bool(ARCHIVED_ASK.search(state.get("prompt", "")))
-        if name == "training_by_group" or (name == "export_csv" and args.get("dataset") == "training_by_group"):
+        if name == "export_csv" and _wants_people_file(state.get("prompt", "")) \
+                and args.get("dataset") in (None, "", "training_by_group", "training_campaigns", "users", "modules"):
+            # "tarik usernya juga, export csv": the per-group counts file has no people in it
+            args["dataset"] = "campaign_people"
+        if name == "export_csv" and args.get("dataset") == "campaign_people":
+            args["status"] = _people_status(state.get("prompt", ""))
+        if name == "training_by_group" or (name == "export_csv" and args.get("dataset") in ("training_by_group", "campaign_people")):
             # the tool finds group names in the question itself (the model dropped some of 21), and the campaign's day
             args["text"] = state.get("prompt", "")
-            if not args.get("campaign_date") and (day := _question_date(state.get("prompt", ""))):
-                args["campaign_date"] = day
+            _campaign_from_question(args, state.get("prompt", ""))
             # archived people only when the question asks: the model switched it on by itself once (798 instead of 775)
             args["include_archived"] = bool(ARCHIVED_ASK.search(state.get("prompt", "")))
+            if name == "training_by_group":
+                args["by"] = "enrolment" if ENROLMENT_ASK.search(state.get("prompt", "")) else "user"
         if name in ("make_chart", "export_csv") and "user_id" in args and not str(args["user_id"]).strip().isdigit():
             # it sent user_id "" or "organisasi" for the organisation's history, which then failed validation
             args.pop("user_id")
@@ -1843,6 +1899,8 @@ class Agent:
                                 call = ("make_chart", {"console": console, "chart": "risk_trend", "user_id": person})
                         elif EXPORT_ASK.search(prompt) and not state.get("export_csv"):
                             exact = msg("call_export", language)
+                            if _wants_people_file(prompt):
+                                call = ("export_csv", {"console": console, "dataset": "campaign_people"})
                         elif (NIST_ASK.search(prompt) or (GUIDANCE_ASK.search(prompt) and AWARENESS_TOPIC.search(prompt)
                                                           and not CONTENT_PICK.search(prompt) and not MODSTORE_ASK.search(prompt))) \
                                 and not state.get("search_nist"):

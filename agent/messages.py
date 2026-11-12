@@ -159,7 +159,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "id": "| Grup | Terkirim | Gagal | Klik | Isi data | Buka lampiran | Melapor | % gagal | % melapor |",
         "en": "| Group | Delivered | Failed | Clicked | Entered data | Opened attachment | Reported | % failed | % reported |",
     },
-    "table_campaign_people": {"id": "| No | Nama | Email | Status | Modul |", "en": "| No | Name | Email | Status | Modules |"},
+    "table_campaign_people": {"id": "| No | Nama | Email | Grup | Status | Modul |", "en": "| No | Name | Email | Groups | Status | Modules |"},
     "table_group_members": {"id": "| No | Nama | Email | Risk score | Level | Phish-prone % | Training Past Due |",
                             "en": "| No | Name | Email | Risk score | Level | Phish-prone % | Past Due training |"},
     "table_person_training": {"id": "| Campaign | Modul | Status | Didaftarkan | Selesai | Menit |",
