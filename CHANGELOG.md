@@ -69,6 +69,11 @@ All notable changes to this project are listed here. Dates are in YYYY-MM-DD for
 - The "Pertanyaan berikutnya / Next question" suggestion at the end of answers is gone.
 
 ### Fixed
+- The comparison tool is refused for questions that compare nothing ("phishing bulan lalu brp yg ketipu", "and last quarter?" got it, with an invented second period); its fallback needs a time word, so "phish-prone kita dibanding benchmark industri" stays the industry benchmark.
+- "bandingin sama tahun lalu" compares this year with last year (it compared last year with the year before).
+- "Who hasn't done training" always gets a tool that lists people (it once got campaign percentages without names).
+- In comparison answers, a sentence whose direction word disagrees with its numbers ("lebih sedikit (2 vs 1)", "meningkat (3 vs 10)") is removed; each clause is checked on its own, and "1.042" / "1,042" are read as thousands.
+- "Compare phishing this quarter with last quarter" compared Q3 with Q2: "with", "and" and "dan" now split a comparison when no stronger word (vs, dibanding, dengan, compared to) is there.
 - A person search where exactly one active person has the exact name asked for picks that person ("Dewi Lestari" also matched an archived "Lestari Dewi Lestari" and the bot asked which one); two active people with the same name still get "which one?".
 - Comparisons read both periods from the question ("kuartal ini dengan kuartal lalu", "this year vs last year", "2026 vs 2025"); the model had guessed both. Without a second period a whole quarter, year or month is compared with the whole one before. The answer starts with a line and a two-column table built from the numbers.
 - Phishing per group starts with a line built in code (the model wrote "1 grup gagal" for one person); sentences counting groups as failing and any best/worst sentence under a group table are removed (a misspelt group name had slipped past).

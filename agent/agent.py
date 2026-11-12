@@ -614,6 +614,47 @@ NOT_A_PERSON = {"organisasi", "kita", "saat", "sekarang", "low", "medium", "high
                 "console", "konsol", "grup", "group", "tim", "team", "rata", "average", "terbaru", "latest", "bulan", "tahun"}
 # "1 grup gagal", "2 groups reported": failures and reports are people (or emails), never groups
 GROUPS_AS_PEOPLE = re.compile(r"\b\d+\s+(?:grup|groups?)\s+(?:yang\s+)?(?:gagal|melapor\w*|klik\w*|failed|reported|clicked)\b", re.I)
+# a direction stated against the numbers next to it: "lebih sedikit (2 vs 1)", "meningkat (3 vs 10)"
+UP_WORD = re.compile(r"\b(?:naik|meningkat\w*|peningkatan|bertambah|lebih (?:banyak|tinggi|besar)|more|higher|increas\w*|rose|grew|up)\b", re.I)
+DOWN_WORD = re.compile(r"\b(?:turun|menurun\w*|penurunan|berkurang|lebih (?:sedikit|rendah|kecil)|fewer|less|lower|decreas\w*|dropped|fell|down)\b",
+                       re.I)
+# "1.042" (indonesian) and "1,042" (english) are thousands; "14,29" and "14.29" are decimals
+NUM = r"(\d{1,3}(?:[.,]\d{3})+(?![\d])|\d+(?:[.,]\d+)?)\s*%?"
+VERSUS = re.compile(NUM + r"\s*(?:vs\.?|versus|dibanding(?:kan)?|against|terhadap)\s*" + NUM, re.I)
+COMPARISON_WORD = re.compile(r"\b(?:vs\.?|versus|dibanding(?:kan)?|against|terhadap|menjadi)\b", re.I)
+FROM_TO = re.compile(r"\b(?:dari|from)\s+" + NUM + r"[^.;()\d]{0,40}?\b(?:menjadi|ke|to|jadi)\s+" + NUM, re.I)
+
+
+def _number(token: str) -> float:
+    if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", token):
+        return float(re.sub(r"[.,]", "", token))
+    return float(token.replace(",", "."))
+
+
+# clauses: ", " (a decimal comma has no space after it), and / dan / but / tetapi / while / sementara, ";"
+CLAUSE_SPLIT = re.compile(r",\s+|;\s*|\s+(?:and|dan|but|tetapi|namun|while|sementara|whereas)\s+", re.I)
+
+
+def _wrong_clause(clause: str) -> bool:
+    up, down = UP_WORD.search(clause) is not None, DOWN_WORD.search(clause) is not None
+    # both kinds of word, or two comparisons ("2 tes vs 1 tes dan 8 vs 49 email"): the word may belong to either
+    if up == down or len(COMPARISON_WORD.findall(clause)) > 1:
+        return False
+    pairs = [(_number(a), _number(b)) for a, b in VERSUS.findall(clause)]
+    pairs += [(_number(b), _number(a)) for a, b in FROM_TO.findall(clause)]
+    if len(pairs) != 1 or pairs[0][0] == pairs[0][1]:
+        return False
+    now, before = pairs[0]
+    return (now > before) != up
+
+
+def _wrong_direction(sentence: str) -> bool:
+    """a direction word that disagrees with the pair of numbers in its own clause. "A vs B" is this period against the
+    earlier one; "dari A menjadi B" is the change from A to B. "fewer tests (1 vs 2) and to fewer people (49 vs 12)"
+    has one right and one wrong clause: the sentence goes"""
+    return any(_wrong_clause(c) for c in CLAUSE_SPLIT.split(sentence))
+
+
 ARCHIVED_ASK = re.compile(r"\b(?:arsip\w*|diarsipkan|archived?|include archived|termasuk (?:yang )?(?:sudah )?(?:diarsipkan|arsip))\b", re.I)
 
 
@@ -724,6 +765,7 @@ def _with_breakdown_table(answer: str, name: str, data: dict[str, Any], language
                            failed=t.get("failed", 0), fpct=num(t.get("failure_percent"), "%"), reported=t.get("reported", 0),
                            rpct=num(t.get("report_percent"), "%"), unit=unit) + "**"
     if comparison:
+        rest = _drop_sentences_where("**x**\n" + "\n".join(rest), _wrong_direction).split("\n")[1:]
         # the model wrote "peningkatan risiko yang signifikan" and "2 vs 1 tests: fewer"; the line comes from the numbers
         key = "phish_prone_percent" if data.get("metric") == "phishing" else "completion_percent"
         a, b, change = data["current"], data.get("earlier") or {}, data.get("change_points")
@@ -755,12 +797,29 @@ def _campaign_choices(matches: list[dict[str, Any]], language: str) -> str:
     return "\n".join(lines + ["", msg("campaign_choices_hint", language)])
 
 
-COMPARE_SPLIT = re.compile(r"\b(?:dengan|dibanding(?:kan)?(?: dengan)?|vs\.?|versus|compared (?:to|with)|against|terhadap)\b", re.I)
+COMPARE_SPLIT = re.compile(r"\b(?:dengan|sama|dibanding(?:kan)?(?: dengan)?|vs\.?|versus|compared (?:to|with)|against|terhadap)\b", re.I)
+# the comparison tool only for questions that compare: "phishing bulan lalu brp yg ketipu" and "and last quarter?" got it
+COMPARE_ASK = re.compile(r"\b(?:banding\w*|dibanding\w*|bandingin|compar\w*|vs\.?|versus|against|terhadap|selisih|difference|"
+                         r"lebih (?:baik|buruk|bagus|jelek)|better|worse)\b", re.I)
+# "tahun lalu" alone is the other side: the current one is "tahun ini"
+THIS_INSTEAD = ((r"\blalu\b", "ini"), (r"\bkemarin\b", "ini"), (r"\bsebelumnya\b", "ini"), (r"\blast\b", "this"), (r"\bprevious\b", "this"))
+# only when none of those is there: "compare phishing this quarter with last quarter" read only "last quarter"
+COMPARE_SPLIT_WEAK = re.compile(r"\b(?:with|and|dan)\b", re.I)
 
 
 def _two_periods(text: str) -> tuple[Any, Any]:
     """the period on each side of "A dengan/vs B"; one side or none when the question names fewer"""
     parts = COMPARE_SPLIT.split(text, maxsplit=1)
+    if len(parts) != 2:
+        parts = COMPARE_SPLIT_WEAK.split(text, maxsplit=1)
+    if len(parts) == 2 and parse_period(parts[0]) and parse_period(parts[1]):
+        return parse_period(parts[0]), parse_period(parts[1])
+    if len(parts) == 2 and not parse_period(parts[0]) and (other := parse_period(parts[1])):
+        # "bandingin sama tahun lalu": 2025 was taken as the current year and compared with 2024
+        current = parts[1]
+        for pattern, word in THIS_INSTEAD:
+            current = re.sub(pattern, word, current, flags=re.I)
+        return parse_period(current), other
     if len(parts) == 2:
         return parse_period(parts[0]), parse_period(parts[1])
     return parse_period(text), None
@@ -1061,10 +1120,12 @@ TOPIC_TOOLS = (
     (re.compile(r"\b(?:belum pernah|tidak pernah|never|not yet|unphished|untrained|tanpa)\b[^?!]{0,40}"
                 r"\b(?:dites|di-?tes|tes phishing|phish\w*|simulasi|test\w*|training|pelatihan|ditraining|dilatih|enrol\w*|terdaftar)\b", re.I),
      "coverage_gaps", {"coverage_gaps"}),
-    # two periods side by side
-    (re.compile(r"\b(?:banding\w*|dibanding\w*|compare\w*|comparison|vs\.?|versus)\b[^?!]{0,80}\b(?:phishing|phish-?prone|training|pelatihan)\b"
-                r"|\b(?:phishing|phish-?prone|training|pelatihan)\b[^?!]{0,80}\b(?:banding\w*|dibanding\w*|compare\w*|vs\.?|versus)\b", re.I),
-     "compare_periods", {"compare_periods"}),
+    # two periods side by side; a time word is needed: "phish-prone kita dibanding benchmark industri" is the benchmark
+    (re.compile(r"^(?=.*\b(?:kuartal|quarter|q[1-4]|tahun|year|bulan|month|periode|period|minggu|week|semester|20\d{2}|lalu|last|"
+                r"previous|sebelumnya)\b)"
+                r"(?:.*\b(?:banding\w*|dibanding\w*|compare\w*|comparison|vs\.?|versus)\b[^?!]{0,80}\b(?:phishing|phish-?prone|training|pelatihan)\b"
+                r"|.*\b(?:phishing|phish-?prone|training|pelatihan)\b[^?!]{0,80}\b(?:banding\w*|dibanding\w*|compare\w*|vs\.?|versus)\b)", re.I | re.S),
+     "compare_periods", {"compare_periods", "industry_benchmark"}),
     # before callback, new joiners and modules: "skrip callback", "auto-enrol new users" and "jadwal" are settings questions
     (re.compile(r"\b(?:templat\w*|templates?|landing ?pages?|halaman landing|email notifikasi|notification emails?|"
                 r"skrip (?:telepon|callback)|callback scripts?)\b", re.I),
@@ -1086,6 +1147,11 @@ TOPIC_TOOLS = (
      "training_library", {"training_library", "training_by_module", "modstore_content"}),
     (re.compile(r"\b(?:modul\w*|modules?|materi\w*|kursus|courses?|video\w*)\b", re.I),
      "training_by_module", {"training_by_module", "modstore_content"}),
+    # "yg blm training siapa aja" once got campaign percentages, no names; any tool that lists the people answers it
+    (re.compile(r"\b(?:siapa|who)\b[^?!]{0,40}\b(?:belum|blm|not yet|haven'?t|hasn'?t|did not|didn'?t)\b[^?!]{0,30}"
+                r"\b(?:training|pelatihan|selesai\w*|finish\w*|complet\w*)\b"
+                r"|\b(?:belum|blm|not yet)\b[^?!]{0,30}\b(?:training|pelatihan|selesai\w*)\b[^?!]{0,30}\b(?:siapa|who)\b", re.I),
+     "overdue_training", {"overdue_training", "coverage_gaps", "campaign_people", "training_by_group", "training_by_module"}),
     (re.compile(r"\b(?:log ?in\w*|sign(?:ed)? ?in\w*|masuk ke knowbe4|belum pernah masuk)\b", re.I),
      "sign_in_activity", {"sign_in_activity"}),
     (re.compile(r"\b(?:karyawan|pegawai|pengguna|users?|staf|orang)\s+baru\b|\bnew\s+(?:joiners?|hires?|employees?|users?|staff|starters?)\b"
@@ -1400,6 +1466,9 @@ class Agent:
             args.pop("start_date", None)
             args.pop("end_date", None)
             args.update(state["period"].args())
+        if name == "compare_periods" and not COMPARE_ASK.search(state.get("prompt", "")):
+            return _error("This question does not compare two periods. Answer it with the summary tools for the one period it "
+                          "names (phishing_campaign_summary, training_completion_summary). Do not mention this rule to the user.")
         if name == "compare_periods":
             # "kuartal ini dengan kuartal lalu": the model guessed both quarters; each side of the comparison has its period
             first, second = _two_periods(state.get("prompt", ""))

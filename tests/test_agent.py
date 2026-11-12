@@ -2319,3 +2319,107 @@ async def test_a_comparison_answer_gets_its_table_and_line(monkeypatch):
                    reply("**Peningkatan risiko yang signifikan.**\n\nPenjelasan.")])
     answer = await make_agent(make_config(monkeypatch), llm, session).ask("bandingkan phishing kuartal ini dengan kuartal lalu")
     assert answer.startswith("**Phish-prone %: 37,5% pada 2026-10-01 to 2026-11-12") and "| Tes | 2 | 1 |" in answer
+
+
+@pytest.mark.parametrize("sentence,wrong", [
+    ("Meskipun jumlah test lebih sedikit (2 vs 1).", True),             # live: 2 tests is more
+    ("Jumlah email yang dilaporkan juga meningkat (3 vs 10).", True),     # live: 3 against 10 is a drop
+    ("Phish-prone % turun dari 14,29% menjadi 37,5%.", True),
+    ("Phish-prone % naik dari 14,29% menjadi 37,5%.", False),
+    ("Enrolments: 4298 vs 110, much more this year.", False),
+    ("Completion fell from 78.18% to 55.68%.", False),
+    ("Persentase laporan email dari 20,41% menjadi 37,5%.", False),     # no direction word
+    ("Jumlah test lebih sedikit (2 vs 1), tetapi kegagalan naik.", True),   # the first clause is wrong on its own
+    ("Fewer tests were delivered (1 vs 2) and to fewer people (49 vs 12).", True),   # live: the second clause is wrong
+    ("Peserta sedikit lebih sedikit (1.042 vs 1.366).", False),            # thousands, not 1.042 and 1.366
+    ("Enrolments fell (1,042 vs 1,366).", False),
+    ("2 tes vs 1 tes dan 8 vs 49 email, lebih banyak.", False),           # two comparisons: ambiguous
+])
+def test_a_direction_must_match_its_numbers(sentence, wrong):
+    from agent.agent import _wrong_direction
+    assert _wrong_direction(sentence) is wrong
+
+
+def test_comparison_answers_lose_sentences_with_the_wrong_direction():
+    from agent.agent import _with_breakdown_table
+    data = {"metric": "phishing", "change_points": 23.21, "better": False,
+            "current": {"period": "2026-10-01 to 2026-11-12", "tests": 2, "phish_prone_percent": 37.5},
+            "earlier": {"period": "2026-07-01 to 2026-09-30", "tests": 1, "phish_prone_percent": 14.29}}
+    out = _with_breakdown_table("**x**\n\n- Meskipun jumlah test lebih sedikit (2 vs 1).\n- Phish-prone % naik dari 14,29% menjadi 37,5%.",
+                                "compare_periods", data, "id")
+    assert "lebih sedikit" not in out and "- Phish-prone % naik dari 14,29% menjadi 37,5%." in out
+
+
+
+@pytest.mark.parametrize("question,first,second", [
+    ("compare phishing this quarter with last quarter", {"start_date": "2026-10-01"}, {"start_date": "2026-07-01", "end_date": "2026-09-30"}),
+    ("training this year and last year", {"start_date": "2026-01-01"}, {"start_date": "2025-01-01", "end_date": "2025-12-31"}),
+    ("phishing per group with this quarter vs last quarter", {"start_date": "2026-10-01"}, {"start_date": "2026-07-01", "end_date": "2026-09-30"}),
+])
+def test_weak_comparison_words(monkeypatch, question, first, second):
+    # live: "with" was not a comparison word, so only "last quarter" was read (Q3 against Q2)
+    from datetime import date as real_date
+
+    import agent.period as period
+
+    class Today(real_date):
+        @classmethod
+        def today(cls):
+            return real_date(2026, 11, 12)
+
+    monkeypatch.setattr(period, "date", Today)
+    from agent.agent import _two_periods
+    a, b = _two_periods(question)
+    assert a.args() == first and b.args() == second
+
+
+@pytest.mark.parametrize("prompt", ["phishing bulan lalu brp yg ketipu", "and last quarter?"])
+async def test_compare_periods_is_refused_when_nothing_is_compared(monkeypatch, prompt):
+    # live regression: the model used the comparison tool for a single period and invented the other one
+    session = breakdown_session()
+    llm = FakeLLM([reply(calls=[tool_call("c1", "compare_periods", '{"console": "main", "metric": "phishing"}')], finish="tool_calls"),
+                   reply("**ok**"), reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert "compare_periods" not in [c[0] for c in session.calls]
+    refused = [m for r in llm.requests for m in r["messages"] if m.get("role") == "tool"]
+    assert refused and "does not compare two periods" in refused[0]["content"]
+
+
+def test_only_the_other_side_named_means_this_versus_that(monkeypatch):
+    from datetime import date as real_date
+
+    import agent.period as period
+
+    class Today(real_date):
+        @classmethod
+        def today(cls):
+            return real_date(2026, 11, 12)
+
+    monkeypatch.setattr(period, "date", Today)
+    from agent.agent import _two_periods
+    a, b = _two_periods("bandingin sama tahun lalu")
+    assert a.args() == {"start_date": "2026-01-01"} and b.args() == {"start_date": "2025-01-01", "end_date": "2025-12-31"}
+    a, b = _two_periods("compare with last quarter")
+    assert a.args() == {"start_date": "2026-10-01"} and b.args() == {"start_date": "2026-07-01", "end_date": "2026-09-30"}
+
+
+@pytest.mark.parametrize("prompt", ["yg blm training siapa aja", "siapa saja yang belum selesai training?", "who hasn't finished their training?"])
+async def test_who_has_not_done_training_gets_names(monkeypatch, prompt):
+    # live: answered with campaign percentages from training_completion_summary, no names
+    session = breakdown_session()
+    session.tools.append(SimpleNamespace(name="training_completion_summary", description="d", input_schema={"type": "object"}))
+    llm = FakeLLM([reply(calls=[tool_call("c1", "training_completion_summary", '{"console": "main"}')], finish="tool_calls"),
+                   reply("**Penyelesaian rata-rata 18%.**"), reply("**Dari data.**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert "overdue_training" in [c[0] for c in session.calls]
+
+
+@pytest.mark.parametrize("prompt,compare", [
+    ("phish-prone kita dibanding benchmark industri gimana?", False),   # the industry benchmark, not two periods
+    ("bandingkan phishing kuartal ini dengan kuartal lalu", True),
+    ("training completion this year vs last year", True),
+])
+def test_the_comparison_topic_needs_a_time_word(prompt, compare):
+    from agent.agent import TOPIC_TOOLS
+    topic = next(t for t in TOPIC_TOOLS if t[1] == "compare_periods")
+    assert bool(topic[0].search(prompt)) is compare
