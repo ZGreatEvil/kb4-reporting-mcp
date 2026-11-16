@@ -19,6 +19,7 @@ AGENTS.md
 instructions.md
 .cursor/
 .windsurf/
+.vscode/
 *.prompt.md
 # secrets and backups
 .env.*
