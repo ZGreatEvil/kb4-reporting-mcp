@@ -17,6 +17,7 @@ from kb4_mcp.summaries import (
     STATUS_COLUMN,
     STATUS_RANK,
     _bad_period,
+    _campaign_targets,
     _date,
     _failures,
     _find_group,
@@ -152,14 +153,16 @@ async def campaign_people_rows(
     picked = chosen["picked"]
     camp_ids = {c.get("campaign_id") for c in picked}
     people = _people(await kb.list_users(console))
-    per_user: dict[Any, list[dict[str, Any]]] = {}
+    # one row per person per campaign, as KnowBe4 counts: someone in two of a day's campaigns is two rows (945, not 944)
+    per_pair: dict[tuple[Any, Any], list[dict[str, Any]]] = {}
     for e in await kb.list_training_enrollments(console, include_campaign_id=True):
         if e.get("campaign_id") in camp_ids:
-            per_user.setdefault((e.get("user") or {}).get("id"), []).append(e)
+            per_pair.setdefault(((e.get("user") or {}).get("id"), e.get("campaign_id")), []).append(e)
     wanted_ids = {g.get("id") for g in resolved}
     group_name = {g.get("id"): str(g.get("name") or "") for g in all_groups}
-    rows = []
-    for uid, enrolments in per_user.items():
+    campaign_by_id = {c.get("campaign_id"): c for c in picked}
+    rows, counted = [], set()
+    for (uid, cid), enrolments in per_pair.items():
         user = people.get(uid)
         if not _active(user, include_archived):
             continue
@@ -170,11 +173,17 @@ async def campaign_people_rows(
         column = STATUS_COLUMN.get(worst, "other")
         if status == UNFINISHED and column == "completed" or status not in ("all", UNFINISHED) and column != status:
             continue
-        # only the named groups when some were named (a person in two of them shows both), else every group they are in
+        # only the named groups when some were named, else every group they are in; with several campaigns, the groups this
+        # campaign was aimed at (the person in two campaigns shows one group on each row) unless it was aimed at none of them
         shown = [g for g in member_of if g in wanted_ids] if wanted_ids else member_of
+        targets = _campaign_targets(campaign_by_id.get(cid) or {})
+        if len(picked) > 1 and [g for g in shown if g in targets]:
+            shown = [g for g in shown if g in targets]
         done = [e for e in enrolments if STATUS_COLUMN.get(str(e.get("status") or "")) == "completed"]
         dates = sorted(d for e in done if (d := _date(e.get("completion_date"))))
+        counted.add(uid)
         rows.append({"name": _name(user), "email": user.get("email"),
+                     "campaign": str((campaign_by_id.get(cid) or {}).get("name") or "").strip(),
                      "groups": [group_name[g] for g in shown if group_name.get(g)],
                      "status": worst, "modules_completed": len(done), "modules_enrolled": len(enrolments),
                      # the day the last module was finished, only once all are
@@ -182,8 +191,9 @@ async def campaign_people_rows(
                      "archived": user.get("status") == "archived",
                      "modules": [{"module": e.get("module_name"), "status": e.get("status"), "completed": _date(e.get("completion_date")) or None}
                                  for e in enrolments]})
-    rows.sort(key=lambda r: (str(r["status"]), r["name"].casefold()))
-    return {"rows": rows, "picked": picked, "resolved": resolved, "unknown": unknown, "status": status}
+    rows.sort(key=lambda r: (str(r["status"]), r["name"].casefold(), r["campaign"]))
+    return {"rows": rows, "picked": picked, "resolved": resolved, "unknown": unknown, "status": status,
+            "different_people": len(counted)}
 
 
 async def campaign_people(
@@ -206,9 +216,11 @@ async def campaign_people(
         "headline": f"{names} ({_date(picked[0].get('start_date'))}): {len(rows)} people{in_groups} are {label}.",
         "people": [{k: v for k, v in r.items() if k != "archived"} for r in rows[: _limit(limit, PEOPLE_LIMIT)]],
         "total": len(rows),
+        **({"different_people": found["different_people"]} if found["different_people"] != len(rows) else {}),
         "shown": min(len(rows), _limit(limit, PEOPLE_LIMIT)),
         "unknown_groups": found["unknown"],
-        "rule": "a person's status is their least finished module in this campaign",
+        "rule": ("a person's status is their least finished module in this campaign; someone in several of these campaigns "
+                 "counts once per campaign, as in KnowBe4"),
         "note": ("The list is added to the answer automatically as a table; summarise it. For every person in a file, "
                  "export_csv with dataset campaign_people. " + NO_ADVICE),
     }

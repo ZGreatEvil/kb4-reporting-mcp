@@ -328,3 +328,34 @@ async def test_users_export_is_active_only_unless_asked():
     everyone = await outputs.export_csv(StatusKB(), "main", "users", status="all")
     assert (active["rows"], active["status_filter"]) == (3, "active")
     assert (everyone["rows"], everyone["status_filter"]) == (4, "all")
+
+
+
+async def test_excel_export_is_a_real_workbook(tmp_dirs):
+    from openpyxl import load_workbook
+
+    result = await outputs.export_csv(FakeKB(), "main", "users", file_type="xlsx")
+    assert result["file_type"] == "xlsx" and result["file_name"].endswith(".xlsx")
+    file_id = result["download_url"].split("/exports/")[1].split(".xlsx")[0]
+    assert len(file_id) == 32 and result["download_url"].endswith(f"?name={result['file_name']}")
+    ws = load_workbook(tmp_dirs / "exports" / f"{file_id}.xlsx").active
+    assert [c.value for c in ws[1]] == result["columns"] and ws.max_row - 1 == result["rows"] == 3
+    assert all(c.font.bold for c in ws[1]) and ws.freeze_panes == "A2" and ws.auto_filter.ref == ws.dimensions
+    # numbers stay numbers; text that starts with "=" stays text (openpyxl would store a formula)
+    names = {c.value: c.data_type for c in ws["B"][1:]}
+    assert names["=cmd Evil"] == "s"
+    assert all(c.data_type == "n" for c in ws["G"][1:] if c.value is not None)
+
+
+async def test_excel_export_strips_control_characters_and_rejects_other_types(tmp_dirs):
+    from openpyxl import load_workbook
+
+    class ControlKB(FakeKB):
+        async def list_users(self, console, status=None, group_id=None, max_records=None):
+            return [{"id": 1, "first_name": "Ana\x07", "last_name": "B\x1b", "status": "active"}]
+
+    result = await outputs.export_csv(ControlKB(), "main", "users", file_type="xlsx")
+    ws = load_workbook(tmp_dirs / "exports" / (result["download_url"].split("/exports/")[1].split(".xlsx")[0] + ".xlsx")).active
+    assert ws["B2"].value == "Ana B"
+    bad = await outputs.export_csv(FakeKB(), "main", "users", file_type="pdf")
+    assert bad["error"] is True and "file_type must be one of" in bad["message"]

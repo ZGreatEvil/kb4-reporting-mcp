@@ -24,7 +24,7 @@
   // every piece of page text, per language; server messages come back already translated
   const STRINGS = {
     id: {
-      welcome: 'Siap. Tanyakan tentang risk score, kampanye phishing, pengguna, grup, training atau panduan NIST. Saya juga bisa membuat grafik dan file CSV.',
+      welcome: 'Siap. Tanyakan tentang risk score, kampanye phishing, pengguna, grup, training atau panduan NIST. Saya juga bisa membuat grafik dan file CSV atau Excel.',
       placeholder: 'Tanya laporan KnowBe4…',
       inputLabel: 'Pertanyaan Anda',
       send: 'Kirim',
@@ -55,7 +55,7 @@
       locale: 'id-ID',
     },
     en: {
-      welcome: 'Ready. Ask about risk scores, phishing campaigns, users, groups, training or NIST guidance. I can also make charts and CSV files.',
+      welcome: 'Ready. Ask about risk scores, phishing campaigns, users, groups, training or NIST guidance. I can also make charts and CSV or Excel files.',
       placeholder: 'Ask about KnowBe4 reports…',
       inputLabel: 'Your question',
       send: 'Send',
@@ -92,7 +92,7 @@
   let healthState = 'checking';
   // questions sent while an answer is still coming wait here and go out in order
   const queue = [];
-  const MAX_QUEUE = 5;
+  const MAX_QUEUE = 10;
   // this conversation only; sent with each question so "2" or "show more" make sense
   const history = [];
   const HISTORY_SENT = 6;
@@ -272,7 +272,8 @@
     }
   });
 
-  function add(content, cls, isMarkdown = false) {
+  // after: the question an answer belongs to, so queued questions read question, answer, question, answer
+  function add(content, cls, isMarkdown = false, after = null) {
     const isUser = cls === 'user';
     const wrapper = document.createElement('div');
     wrapper.className = isUser ? 'msg-user' : 'msg-ai';
@@ -288,10 +289,14 @@
       else bubble.textContent = content;
       wrapper.appendChild(bubble);
     }
-    chat.appendChild(wrapper);
+    const inPlace = after && after.isConnected && after.nextElementSibling;
+    if (inPlace) after.after(wrapper);
+    else chat.appendChild(wrapper);
     if (isMarkdown) activateTables(bubble);
     lucide.createIcons();
-    toBottom(true);
+    // in the middle of the chat (questions still waiting below): show it without jumping past it
+    if (inPlace) { if (nearBottom()) wrapper.scrollIntoView({ block: 'nearest' }); }
+    else toBottom(true);
     return bubble;
   }
 
@@ -316,7 +321,7 @@
     resizeInput();
     showCounter();
     const userBubble = add(m, 'user');
-    const item = { m, lang, tag: null, conversation };
+    const item = { m, lang, tag: null, conversation, anchor: userBubble.parentElement };
     if (busy) {
       item.tag = document.createElement('div');
       item.tag.className = 'queued-tag mt-1 text-[11px] text-white/90';
@@ -335,7 +340,7 @@
       const item = queue.shift();
       if (item.tag) item.tag.remove();
       updateControls();
-      if (item.conversation === conversation) await runQuestion(item.m, item.lang);
+      if (item.conversation === conversation) await runQuestion(item.m, item.lang, item.anchor);
     }
     busy = false;
     updateControls();
@@ -350,13 +355,13 @@
     history.push({ role: 'user', content: question }, { role: 'assistant', content });
   }
 
-  async function runQuestion(m, requestLang) {
+  async function runQuestion(m, requestLang, anchor = null) {
     // the language at the time of asking, even if the switch changes while it waits
     const t = STRINGS[requestLang];
     const asked = conversation;
 
     // status line with elapsed time until text arrives, since local answers can take a while
-    const bubble = add(t.loading(0), 'ai', false);
+    const bubble = add(t.loading(0), 'ai', false, anchor);
     bubble.setAttribute('aria-busy', 'true');
     const started = Date.now();
     const secs = () => Math.round((Date.now() - started) / 1000);
@@ -385,7 +390,16 @@
       bubble.replaceChildren(span);
     };
     const renderAnswer = (text) => {
-      chat.dataset.follow = keepBottom(() => bubble.replaceChildren(renderMarkdown(text))) ? '1' : '0';
+      const wrapper = bubble.parentElement;
+      if (wrapper && wrapper.nextElementSibling) {
+        // questions still wait below this answer: bring its start into view instead of the bottom of the chat
+        const follow = nearBottom();
+        bubble.replaceChildren(renderMarkdown(text));
+        if (follow) wrapper.scrollIntoView({ block: 'start' });
+        chat.dataset.follow = '0';
+      } else {
+        chat.dataset.follow = keepBottom(() => bubble.replaceChildren(renderMarkdown(text))) ? '1' : '0';
+      }
       activateTables(bubble);
     };
 

@@ -139,7 +139,7 @@ async def test_csv_export_has_every_group_and_the_total(tmp_path, monkeypatch):
     path = tmp_path / r["download_url"].split("/")[-1].split("?")[0]
     rows = list(csv.reader(path.read_text(encoding="utf-8-sig").splitlines()))
     assert rows[0][:6] == ["group", "people", "completed", "in_progress", "not_started", "past_due"]
-    assert [row[0] for row in rows[1:]] == ["Group-A1", "Group-B1", "Total (each person once)"]
+    assert [row[0] for row in rows[1:]] == ["Group-A1", "Group-B1", "Total (per campaign, as in KnowBe4)"]
     # an ambiguous campaign name: the question goes back, no file
     ask = await outputs.export_csv(FakeKB(), "main", "training_by_group", campaign="awareness training")
     assert ask.get("ask_user") is True and "download_url" not in ask
@@ -168,5 +168,18 @@ async def test_a_person_in_two_same_day_campaigns_is_explained():
             return [dict(e) for e in extra]
 
     r = await summaries.training_by_group(KB(), "main", campaign_date="2026-10-07", text="grup Group-A1, Group-C1")
-    assert r["totals"]["total"] == 3 and r["people_counted_per_campaign"] == 4 and r["people_in_several_campaigns"] == 1
-    assert r["headline"].endswith("The campaigns add up to 4 people because 1 person(s) were enrolled in more than one of them.")
+    # the user wants KnowBe4's number: a person counts once per campaign (945), the different people (944) in a note
+    assert r["totals"]["total"] == 4 and r["totals"]["completed"] == 3 and r["totals"]["past_due"] == 1
+    assert r["people_counted_per_campaign"] == 4 and r["different_people"] == 3 and r["people_in_several_campaigns"] == 1
+    assert r["headline"].endswith("3 different people: 1 person(s) are in more than one of these campaigns and count once per "
+                                  "campaign, as in KnowBe4.")
+    # group rows still count the person once per group
+    assert {g["group"]: g["total"] for g in r["groups"]} == {"Group-A1": 2, "Group-C1": 1}
+
+    from kb4_mcp import breakdowns
+    people = await breakdowns.campaign_people_rows(KB(), "main", campaign_date="2026-10-07", status="all",
+                                                   text="grup Group-A1, Group-C1")
+    assert len(people["rows"]) == 4 and people["different_people"] == 3
+    twice = sorted((r["campaign"], r["status"]) for r in people["rows"] if r["modules_enrolled"] and r["groups"] == ["Group-A1"]
+                   and r["status"] != "Passed" or r["campaign"] == "Awareness Training (Language B)" and r["groups"] == ["Group-A1"])
+    assert twice == [("Awareness Training", "Past Due"), ("Awareness Training (Language B)", "Passed")]

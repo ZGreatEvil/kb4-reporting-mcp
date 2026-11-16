@@ -279,3 +279,28 @@ def test_export_download_names_are_plain(client, monkeypatch, tmp_path, name, ex
 def test_api_docs_are_not_served(client, path):
     # audit 2026-11-12: /docs pulled swagger from a CDN the CSP blocks, and described the whole api on the LAN
     assert client.get(path).status_code == 404
+
+
+
+def test_excel_download_is_served_with_its_type(client, tmp_path):
+    file_id = "0123456789abcdef0123456789abcdef"
+    (tmp_path / f"{file_id}.xlsx").write_bytes(b"PK\x03\x04")
+    r = client.get(f"/exports/{file_id}.xlsx", params={"name": "../people.xlsx"})
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
+    assert r.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert 'filename="people.xlsx"' in r.headers["content-disposition"]
+    # a csv id is not an excel file, and the other way round
+    assert client.get(f"/exports/{file_id}.csv").status_code == 404
+    assert client.get("/exports/0123.xlsx").status_code == 404
+
+
+def test_excel_download_expires_after_an_hour(client, tmp_path):
+    import os
+    import time
+
+    file_id = "abcdefabcdefabcdefabcdefabcdefab"
+    path = tmp_path / f"{file_id}.xlsx"
+    path.write_bytes(b"PK")
+    old = time.time() - main.KEEP_SECONDS - 5
+    os.utime(path, (old, old))
+    assert client.get(f"/exports/{file_id}.xlsx").status_code == 404 and not path.exists()

@@ -104,17 +104,32 @@ HTML = HTML_PATH.read_text(
 # CSV EXPORTS
 # =========================================================
 
+EXPORT_TYPES = {"csv": "text/csv", "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+
+
 @app.get("/exports/{file_id}.csv")
 async def download_export(
     file_id: str,
     name: str = "export.csv",
 ):
+    return _send_export(file_id, name, "csv")
+
+
+@app.get("/exports/{file_id}.xlsx")
+async def download_export_xlsx(
+    file_id: str,
+    name: str = "export.xlsx",
+):
+    return _send_export(file_id, name, "xlsx")
+
+
+def _send_export(file_id: str, name: str, ext: str) -> FileResponse:
 
     # ids are uuid hex written by kb4_mcp.outputs; anything else could reach outside the folder
     if not re.fullmatch(r"[0-9a-f]{32}", file_id):
         raise HTTPException(status_code=404)
 
-    path = EXPORT_DIR / f"{file_id}.csv"
+    path = EXPORT_DIR / f"{file_id}.{ext}"
 
     if not path.is_file():
         raise HTTPException(status_code=404)
@@ -126,12 +141,12 @@ async def download_export(
 
     # only the last path part, without leading dots: "../../evil.bat" became ".._.._evil.bat.csv"
     base = re.split(r"[\\/]", name)[-1].lstrip(".")
-    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", base)[:120] or "export.csv"
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", base)[:120] or f"export.{ext}"
 
     return FileResponse(
         path,
-        media_type="text/csv",
-        filename=safe_name if safe_name.endswith(".csv") else safe_name + ".csv",
+        media_type=EXPORT_TYPES[ext],
+        filename=safe_name if safe_name.endswith(f".{ext}") else f"{safe_name}.{ext}",
         # personal data: never keep a copy in a shared cache
         headers={"Cache-Control": "no-store"},
     )

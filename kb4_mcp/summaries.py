@@ -342,7 +342,7 @@ async def find_user(kb: Any, console: str, query: str, limit: int = 10) -> dict[
     if not needle:
         return {"console": console, "query": query, "matches": [], "note": "Empty query."}
     users = await kb.list_users(console, None)
-    fields = ("first_name", "last_name", "email", "job_title", "department")
+    fields = ("first_name", "last_name", "email", "job_title", "department", "employee_number")
 
     def matches(u: dict[str, Any]) -> bool:
         haystack = " ".join(str(u.get(f) or "") for f in fields).lower() + " " + _name(u).lower()
@@ -613,19 +613,25 @@ async def training_by_group(
     people = {u.get("id"): u for u in await kb.list_users(console)}
     per_user: dict[Any, list[str]] = {}
     archived: dict[Any, list[str]] = {}
+    # a person's statuses in each campaign: the totals count a person once per campaign, as KnowBe4 does
+    per_pair: dict[tuple[Any, Any], list[str]] = {}
     campaigns_of: dict[Any, set[Any]] = {}
     for e in enrolments:
         uid = (e.get("user") or {}).get("id")
         campaigns_of.setdefault(uid, set()).add(e.get("campaign_id"))
         # archived people left the organisation; they are counted only when asked (Group-A1: 17 active, 33 with archived)
-        bucket = per_user if include_archived or (people.get(uid) or {}).get("status") != "archived" else archived
-        bucket.setdefault(uid, []).append(str(e.get("status") or "unknown"))
+        counted = include_archived or (people.get(uid) or {}).get("status") != "archived"
+        (per_user if counted else archived).setdefault(uid, []).append(str(e.get("status") or "unknown"))
+        if counted:
+            per_pair.setdefault((uid, e.get("campaign_id")), []).append(str(e.get("status") or "unknown"))
     member_of = {uid: set(u.get("groups") or []) for uid, u in people.items()}
 
-    def tally(user_ids: list[Any]) -> dict[str, int]:
+    def tally(units: list[list[str]]) -> dict[str, int]:
+        """each unit is one person (in a group row) or one person in one campaign (the totals), by their least finished
+        module; counted by enrolment, every status on its own"""
         counts = Counter()
-        for uid in user_ids:
-            statuses = per_user[uid] if by == "enrolment" else [max(per_user[uid], key=lambda s: STATUS_RANK.get(s, 1))]
+        for unit_statuses in units:
+            statuses = unit_statuses if by == "enrolment" else [max(unit_statuses, key=lambda s: STATUS_RANK.get(s, 1))]
             for s in statuses:
                 counts[STATUS_COLUMN.get(s, "other")] += 1
         row = {k: counts[k] for k in ("completed", "in_progress", "not_started", "past_due")}
@@ -646,11 +652,14 @@ async def training_by_group(
             continue
         everyone.update(uids)
         left_out.update(gone)
-        rows.append({"group": g.get("name"), **tally(uids), **({"archived_not_counted": len(gone)} if gone else {})})
-    totals = tally(sorted(everyone, key=str))
-    # KnowBe4 counts a person in every campaign they are in: 945 for the four campaigns of 2026-10-07, 944 different people
+        rows.append({"group": g.get("name"), **tally([per_user[uid] for uid in uids]),
+                     **({"archived_not_counted": len(gone)} if gone else {})})
+    # KnowBe4 counts a person in every campaign they are in: 945 for the four campaigns of 2026-10-07 (944 different people),
+    # and the user wants KnowBe4's number
+    pairs = sorted((key for key in per_pair if key[0] in everyone), key=str)
+    totals = tally([per_pair[key] for key in pairs] if by == "user" else [per_user[uid] for uid in sorted(everyone, key=str)])
     in_several = sorted((uid for uid in everyone if len(campaigns_of.get(uid, ())) > 1), key=str)
-    per_campaign = sum(len(campaigns_of.get(uid, ())) for uid in everyone)
+    per_campaign = len(pairs)
     unit = "people" if by == "user" else "enrolments"
     starts = sorted({_date(c.get("start_date")) for c in picked})
     started = starts[0] if len(starts) == 1 else f"{starts[0]} – {starts[-1]}"
@@ -670,9 +679,10 @@ async def training_by_group(
                      f"{totals['completed']} completed, {totals['in_progress']} in progress, {totals['not_started']} not started, "
                      f"{totals['past_due']} Past Due ({totals['percent_complete']}% complete)."
                      + (f" {len(left_out)} archived people in these groups are not counted." if left_out else "")
-                     + (f" The campaigns add up to {per_campaign} people because {len(in_several)} person(s) were enrolled in more "
-                        f"than one of them." if by == "user" and in_several else "")),
+                     + (f" {len(everyone)} different people: {len(in_several)} person(s) are in more than one of these campaigns "
+                        f"and count once per campaign, as in KnowBe4." if by == "user" and in_several else "")),
         "people_counted_per_campaign": per_campaign,
+        "different_people": len(everyone),
         "people_in_several_campaigns": len(in_several),
         "groups": rows,
         "totals": totals,
@@ -680,7 +690,7 @@ async def training_by_group(
         "unknown_groups": unknown,
         "not_in_these_campaigns": not_targeted,
         "rule": ("each person counts once per group, by the status of their least finished module (one Past Due module makes them "
-                 "Past Due); a person in two groups is in both rows but once in the totals") if by == "user" else
+                 "Past Due); the totals count each person once per campaign, as KnowBe4 does") if by == "user" else
                 "every module enrolment counts on its own",
         "note": ("The table with every group is added to the answer automatically: do not list the groups again; name at most three "
                  "that stand out and explain the totals. percent_complete "

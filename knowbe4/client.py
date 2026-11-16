@@ -473,6 +473,11 @@ class KnowBe4Client:
         params = {"campaign_type": campaign_type} if campaign_type else None
         return await self.get(console, f"/v1/phishing/campaigns/{campaign_id}", params)
 
+    async def list_campaign_security_tests(self, console: str, campaign_id: int) -> list[Any]:
+        # one campaign's tests without downloading every test; checked live 2026-11-12 (same fields as the full list)
+        result = await self.get(console, f"/v1/phishing/campaigns/{campaign_id}/security_tests", {})
+        return result if isinstance(result, list) else []
+
     async def list_phishing_security_tests(self, console: str, campaign_type: str | None = None, max_records: int | None = None) -> list[Any]:
         params = {"campaign_type": campaign_type} if campaign_type else {}
         return await self.list_paginated(console, "/v1/phishing/security_tests", params, max_records)

@@ -140,7 +140,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "This question is about a person called {name}. Call find_user with query \"{name}\" now, then answer only from its result (not found, or ask which one).",
     },
     "chart_data": {"id": "Data grafik", "en": "Chart data"},
-    "chart_more": {"id": "…dan {n} lagi (file CSV berisi semuanya).", "en": "…and {n} more (a CSV export has them all)."},
+    "chart_more": {"id": "…dan {n} lagi (file CSV atau Excel berisi semuanya).", "en": "…and {n} more (a CSV or Excel export has them all)."},
     "chart_cols_users_by_level": {"id": "| Level | Pengguna |", "en": "| Level | Users |"},
     "chart_cols_top_users": {"id": "| No | Nama | Risk score | Level |", "en": "| No | Name | Risk score | Level |"},
     "chart_cols_phishing_tests": {"id": "| Tes | Tanggal | Phish-prone % |", "en": "| Test | Date | Phish-prone % |"},
@@ -159,6 +159,49 @@ MESSAGES: dict[str, dict[str, str]] = {
         "id": "| Grup | Terkirim | Gagal | Klik | Isi data | Buka lampiran | Melapor | % gagal | % melapor |",
         "en": "| Group | Delivered | Failed | Clicked | Entered data | Opened attachment | Reported | % failed | % reported |",
     },
+    "table_find_group": {"id": "| No | Grup | Anggota | Risk score | Level | Tipe |", "en": "| No | Group | Members | Risk score | Level | Type |"},
+    "table_find_campaign": {"id": "| No | Kampanye | Status | Terakhir jalan | Tes | Phish-prone % terakhir |",
+                            "en": "| No | Campaign | Status | Last run | Tests | Last phish-prone % |"},
+    "table_find_campaign_training": {"id": "| No | Kampanye | Status | Mulai | Selesai | % selesai |",
+                                     "en": "| No | Campaign | Status | Start | End | % complete |"},
+    "table_list_dimension_values": {"id": "| No | Nilai | Pengguna |", "en": "| No | Value | Users |"},
+    "table_phishing_by_attribute": {"id": "| Nilai | Orang | Email terkirim | Phish-prone % | Email gagal % | Dilaporkan % |",
+                                    "en": "| Value | People | Emails delivered | Phish-prone % | Emails failed % | Reported % |"},
+    "table_training_by_attribute": {"id": "| Nilai | Orang | Selesai | Sedang berjalan | Belum mulai | Past Due | % selesai |",
+                                    "en": "| Value | People | Completed | In progress | Not started | Past Due | % complete |"},
+    "table_manager_report": {"id": "| Manager | Tim | Orang dengan Past Due | Modul Past Due | Orang gagal phishing | Email gagal |",
+                             "en": "| Manager | Team | People with Past Due | Past Due modules | People who failed phishing | Failed emails |"},
+    "table_manager_report_team": {"id": "| No | Nama | Email | Jabatan | Modul Past Due | Email phishing gagal |",
+                                  "en": "| No | Name | Email | Job title | Past Due modules | Failed phishing emails |"},
+    "table_group_report": {"id": "| No | Anggota paling berisiko | Jabatan | Risk score | Level |",
+                           "en": "| No | Riskiest members | Job title | Risk score | Level |"},
+    "table_organisation_summary": {"id": "| Grup | Orang | Risk score | Level | Phish-prone % | Dilaporkan % | % training selesai | Past Due |",
+                                   "en": "| Group | People | Risk score | Level | Phish-prone % | Reported % | % training complete | Past Due |"},
+    "field_department": {"id": "Departemen", "en": "Department"},
+    "field_division": {"id": "Divisi", "en": "Division"},
+    "field_location": {"id": "Lokasi", "en": "Location"},
+    "field_manager_name": {"id": "Manager", "en": "Manager"},
+    "field_job_title": {"id": "Jabatan", "en": "Job title"},
+    "field_organization": {"id": "Organisasi", "en": "Organisation"},
+    "field_custom_field_1": {"id": "Custom field 1", "en": "Custom field 1"},
+    "field_custom_field_2": {"id": "Custom field 2", "en": "Custom field 2"},
+    "field_custom_field_3": {"id": "Custom field 3", "en": "Custom field 3"},
+    "field_custom_field_4": {"id": "Custom field 4", "en": "Custom field 4"},
+    "attribute_empty_groups": {"id": "{field} belum diisi untuk pengguna di KnowBe4, jadi ini hasil per grup KnowBe4.",
+                               "en": "{field} is not filled in for users in KnowBe4, so these are the results per KnowBe4 group."},
+    "table_phishing_trend": {"id": "| Periode | Tes | Email terkirim | Phish-prone % | Dilaporkan % |",
+                             "en": "| Period | Tests | Emails delivered | Phish-prone % | Reported % |"},
+    "table_phishing_by_template": {"id": "| No | Template | Jenis | Kesulitan | Terkirim | Phish-prone % | Dilaporkan % |",
+                                   "en": "| No | Template | Type | Difficulty | Sent | Phish-prone % | Reported % |"},
+    "table_reporting_behaviour": {"id": "| No | Belum pernah melapor | Email diterima | Email gagal |",
+                                  "en": "| No | Never reported | Emails received | Emails failed |"},
+    "table_phishing_click_details": {"id": "| Jenis | Nilai | Kegagalan | % |", "en": "| Kind | Value | Failures | % |"},
+    "table_executive_report": {"id": "| Grup paling berisiko | Orang | Risk score | Level | Phish-prone % | Dilaporkan % | % training selesai | Past Due |",
+                               "en": "| Riskiest groups | People | Risk score | Level | Phish-prone % | Reported % | % training complete | Past Due |"},
+    "table_policy_acknowledgement": {"id": "| Kebijakan | Terdaftar | Sudah disetujui | Belum disetujui | % disetujui |",
+                                     "en": "| Policy | Enrolled | Acknowledged | Not acknowledged | % acknowledged |"},
+    "small_sample_note": {"id": "* kurang dari 5 orang: persentasenya mudah berubah.",
+                          "en": "* fewer than 5 people: the percentages swing easily."},
     "table_campaign_people": {"id": "| No | Nama | Email | Grup | Status | Modul |", "en": "| No | Name | Email | Groups | Status | Modules |"},
     "table_group_members": {"id": "| No | Nama | Email | Risk score | Level | Phish-prone % | Training Past Due |",
                             "en": "| No | Name | Email | Risk score | Level | Phish-prone % | Past Due training |"},
@@ -200,14 +243,14 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "group_training_unit_user": {"id": "orang", "en": "people"},
     "group_training_unit_enrolment": {"id": "enrolmen", "en": "enrolments"},
-    "group_training_total": {"id": "Total (tiap orang sekali)", "en": "Total (each person once)"},
+    "group_training_total": {"id": "Total", "en": "Total"},
     "group_training_standouts": {
         "id": "Penyelesaian tertinggi: {top} ({top_pct}%); terendah: {low} ({low_pct}%). Past Due terbanyak: {most} ({most_n} orang). Grup terbesar: {big} ({big_n} orang).",
         "en": "Highest completion: {top} ({top_pct}%); lowest: {low} ({low_pct}%). Most Past Due: {most} ({most_n} people). Largest group: {big} ({big_n} people).",
     },
     "group_training_overlap": {
-        "id": "Campaign-campaign ini berjumlah {per_campaign} orang karena {count} orang terdaftar di lebih dari satu campaign; tabel menghitung tiap orang sekali ({total}).",
-        "en": "The campaigns add up to {per_campaign} people because {count} person(s) were enrolled in more than one of them; the table counts each person once ({total}).",
+        "id": "Total {per_campaign} dihitung per campaign, seperti di KnowBe4: {count} orang terdaftar di lebih dari satu campaign, jadi ada {different} orang berbeda.",
+        "en": "The total of {per_campaign} counts each campaign, as KnowBe4 does: {count} person(s) are in more than one of these campaigns, so there are {different} different people.",
     },
     "group_training_rule": {
         "id": "Tiap orang dihitung sekali per grup menurut modul yang paling belum selesai (satu modul Past Due = Past Due).",
@@ -284,6 +327,10 @@ MESSAGES: dict[str, dict[str, str]] = {
     "download_csv": {
         "id": "⬇ Unduh CSV: {file} ({rows} baris)",
         "en": "⬇ Download CSV: {file} ({rows} rows)",
+    },
+    "download_xlsx": {
+        "id": "⬇ Unduh Excel: {file} ({rows} baris)",
+        "en": "⬇ Download Excel: {file} ({rows} rows)",
     },
     "call_chart": {
         "id": "Grafik belum dibuat. Panggil make_chart sekarang dengan chart yang sesuai, lalu jelaskan hasilnya.",
@@ -376,45 +423,49 @@ MESSAGES: dict[str, dict[str, str]] = {
         "id": (
             "**Saya membaca data KnowBe4 organisasi Anda dan memberi panduan security awareness.**\n\n"
             "Yang bisa saya lakukan:\n"
-            "- **Risk score:** risk score organisasi sekarang, levelnya, perubahannya dalam 30 dan 90 hari, dan alasannya.\n"
-            "- **Pengguna dan grup:** pengguna dan grup paling berisiko, tren risiko sebuah grup, mencari orang berdasarkan nama atau email, riwayat risk score seseorang, siapa yang belum pernah login ke KnowBe4, dan karyawan baru.\n"
-            "- **Phishing:** hasil tes phishing, siapa yang klik dan siapa yang melaporkan, seberapa cepat orang tertipu, siapa yang gagal lebih dari sekali, callback phishing (lewat telepon), dan phish-prone % dibanding benchmark KnowBe4.\n"
-            "- **Training:** penyelesaian training campaign, progres per modul (lulus, lewat tenggat, belum mulai, waktu pengerjaan), konten training yang dimiliki, dan training yang lewat tenggat.\n"
-            "- **Per grup dan per orang:** hasil phishing dan training per grup, siapa saja yang lewat tenggat di sebuah campaign, anggota sebuah grup, riwayat training seseorang, siapa yang belum pernah dites atau ditraining, dan perbandingan dua periode.\n"
+            "- **Ringkasan dan laporan:** laporan bulanan untuk manajemen, ringkasan keamanan organisasi dengan semua grup berdampingan, laporan lengkap satu grup, hasil phishing dan training per departemen, lokasi atau jabatan, dan laporan per manager (siapa di timnya yang terlambat training atau gagal phishing).\n"
+            "- **Risk score:** risk score organisasi sekarang, levelnya, perubahannya dalam 30 dan 90 hari, dan alasannya; pengguna dan grup paling berisiko, tren risiko sebuah grup, dan riwayat risk score seseorang.\n"
+            "- **Phishing:** hasil tiap tes, siapa yang klik dan siapa yang melaporkan, hasil per grup, tren phish-prone per bulan, template dan tingkat kesulitan yang paling banyak menipu, kebiasaan melapor (persentase, kecepatan, siapa yang tidak pernah melapor), siapa yang gagal lebih dari sekali, seberapa cepat orang tertipu dan dari perangkat atau browser apa, serta callback phishing (lewat telepon).\n"
+            "- **Training:** penyelesaian training campaign, satu campaign per grup (selesai, sedang berjalan, belum mulai, Past Due), siapa saja yang lewat tenggat, siapa yang belum menyetujui sebuah kebijakan, progres per modul, konten training yang dimiliki, riwayat training seseorang, dan siapa yang belum pernah ditraining.\n"
+            "- **Orang dan grup:** mencari orang berdasarkan nama, email atau nomor karyawan, mencari grup atau kampanye berdasarkan nama atau bulan, anggota sebuah grup, daftar departemen, jabatan, manager atau lokasi yang ada, siapa yang belum pernah login ke KnowBe4, karyawan baru, serta tingkat langganan, tanggal berakhir dan jumlah kursi lisensi.\n"
+            "- **Istilah:** arti risk score dan levelnya, phish-prone %, report rate, jenis kegagalan, dan status training.\n"
             "{products}"
-            "- **Periode:** sebutkan periode seperti \"dari 2026\" atau \"3 bulan terakhir\". Tanpa periode, saya memakai 12 bulan terakhir.\n"
-            "- **Grafik dan CSV:** grafik muncul sendiri bila membantu. File CSV saya buat bila Anda memintanya.\n"
+            "- **Periode dan perbandingan:** sebutkan periode seperti \"dari 2026\" atau \"3 bulan terakhir\" (tanpa periode, saya memakai 12 bulan terakhir), atau bandingkan dua periode, misalnya kuartal ini dengan kuartal lalu.\n"
+            "- **Grafik dan file:** grafik muncul sendiri bila membantu, dengan angkanya juga sebagai teks. File CSV atau Excel saya buat bila Anda memintanya, termasuk daftar per orang untuk sebuah campaign.\n"
             "- **Data terbaru:** data KnowBe4 disimpan 10 menit. Tulis \"ambil data terbaru\" atau \"refresh\" untuk mengambilnya langsung dari KnowBe4.\n"
             "- **Panduan NIST:** cara menjalankan, mengukur dan meningkatkan program awareness dan simulasi phishing, dengan sumber dari dokumen NIST.\n\n"
             "Yang tidak bisa saya lakukan: mengubah atau menghapus data (saya hanya membaca), memprediksi nilai di masa depan, "
             "dan menjawab pertanyaan di luar KnowBe4 dan security awareness.\n\n"
             "Contoh pertanyaan:\n"
+            "- Ringkasan keamanan perusahaan kami\n"
             "- Berapa risk score sekarang, dan kenapa?\n"
-            "- Siapa 10 pengguna paling berisiko?\n"
-            "- Siapa yang klik email phishing terakhir?\n"
-            "- Modul training mana yang paling sedikit diselesaikan?\n"
+            "- Tren phish-prone 12 bulan terakhir\n"
+            "- Per manager, siapa yang timnya telat training?\n"
+            "- Template phishing mana yang paling banyak menipu?\n"
             "- Bagaimana cara mengukur efektivitas training security awareness?"
         ),
         "en": (
             "**I read your organisation's KnowBe4 data and give security awareness guidance.**\n\n"
             "What I can do:\n"
-            "- **Risk score:** the organisation's current risk score, its level, how it changed over 30 and 90 days, and why.\n"
-            "- **Users and groups:** the riskiest users and groups, a group's risk trend, finding a person by name or email, a person's risk score history, who has never signed in to KnowBe4, and new joiners.\n"
-            "- **Phishing:** phishing test results, who clicked and who reported, how fast people fell for it, who failed more than once, callback (phone) phishing, and the phish-prone % against KnowBe4's benchmark.\n"
-            "- **Training:** training campaign completion, progress per module (passed, overdue, not started, time spent), the training content you have, and overdue training.\n"
-            "- **Per group and per person:** phishing and training results per group, who is overdue in a campaign, a group's members, a person's training history, who has never been phished or trained, and two periods side by side.\n"
+            "- **Summaries and reports:** a monthly report for management, an organisation security summary with every group side by side, a full report on one group, phishing and training results per department, location or job title, and a report per manager (who in their team is late with training or failed phishing).\n"
+            "- **Risk score:** the organisation's current risk score, its level, how it changed over 30 and 90 days, and why; the riskiest users and groups, a group's risk trend, and a person's risk score history.\n"
+            "- **Phishing:** each test's results, who clicked and who reported, results per group, the phish-prone trend per month, the templates and difficulty levels that fooled most people, reporting habits (rate, speed, who never reports), who failed more than once, how fast people fell for it and on which device or browser, and callback (phone) phishing.\n"
+            "- **Training:** training campaign completion, one campaign per group (completed, in progress, not started, Past Due), who is overdue, who has not acknowledged a policy, progress per module, the training content you have, a person's training history, and who has never been trained.\n"
+            "- **People and groups:** finding a person by name, email or employee number, finding a group or campaign by name or month, a group's members, which departments, job titles, managers or locations exist, who has never signed in to KnowBe4, new joiners, and the subscription level, end date and licensed seats.\n"
+            "- **Terms:** what risk score and its levels, phish-prone %, report rate, failure types and training statuses mean.\n"
             "{products}"
-            "- **Periods:** name a period such as \"since 2026\" or \"the last 3 months\". Without one, I use the past 12 months.\n"
-            "- **Charts and CSV:** charts appear on their own when they help. I make a CSV file when you ask for one.\n"
+            "- **Periods and comparisons:** name a period such as \"since 2026\" or \"the last 3 months\" (without one, I use the past 12 months), or compare two periods, such as this quarter with last quarter.\n"
+            "- **Charts and files:** charts appear on their own when they help, with their numbers as text too. I make a CSV or Excel file when you ask for one, including a per-person list for a campaign.\n"
             "- **Fresh data:** KnowBe4 data is kept for 10 minutes. Say \"fetch fresh data\" or \"refresh\" to get it straight from KnowBe4.\n"
             "- **NIST guidance:** how to run, measure and improve awareness programmes and phishing simulations, with sources from NIST documents.\n\n"
             "What I can't do: change or delete data (I only read it), predict future values, "
             "or answer questions outside KnowBe4 and security awareness.\n\n"
             "Example questions:\n"
+            "- Give me a security summary of our organisation\n"
             "- What is the risk score now, and why?\n"
-            "- Who are the 10 riskiest users?\n"
-            "- Who clicked the latest phishing email?\n"
-            "- Which training module has the lowest completion?\n"
+            "- Phish-prone trend over the last 12 months\n"
+            "- Per manager, whose team is behind on training?\n"
+            "- Which phishing templates fooled the most people?\n"
             "- How can we measure how effective security awareness training is?"
         ),
     },

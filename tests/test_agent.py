@@ -697,7 +697,7 @@ async def test_non_numeric_user_id_is_dropped_for_exports(monkeypatch):
     session.tools.append(SimpleNamespace(name="export_csv", description="d", input_schema={"type": "object"}))
     agent = make_agent(make_config(monkeypatch), llm, session)
     await agent.ask("Export riwayat risk score organisasi ke CSV")
-    assert session.calls == [("export_csv", {"console": "main", "dataset": "risk_history"})]
+    assert session.calls == [("export_csv", {"console": "main", "dataset": "risk_history", "file_type": "csv"})]
 
 
 async def test_knowbe4_down_answer_ignores_local_only_tools(monkeypatch):
@@ -1053,7 +1053,8 @@ async def test_questions_that_only_look_like_capability_questions_go_to_the_mode
 def test_capability_list_has_no_features_the_bot_lacks():
     for language in ("id", "en"):
         text = msg("capabilities", language, products="".join(msg(f"capability_{p}", language) for p in ("ksat", "phisher", "piq", "coach", "events"))).lower()
-        assert not any(word in text for word in ("excel", "departemen", "department", "console", "konsol"))
+        # excel exports and department lists exist since 2026-11-12; consoles are still not offered
+        assert not any(word in text for word in ("console", "konsol"))
 
 OVERVIEW = {
     "current": {"score": 38.01, "level": "Low"},
@@ -1947,7 +1948,7 @@ async def test_per_group_question_reaches_the_tool_with_the_question_and_its_day
                                total=23, unit="orang", groups=2, completed=14, in_progress=0, not_started=0, past_due=9,
                                percent="60,87", percent_past_due="-") + "**"
     assert "| Group-A1 | 17 | 9 | 0 | 0 | 8 | 52,94% |" in answer
-    assert "| **Total (tiap orang sekali)** | **23** | **14** | **0** | **0** | **9** | **60,87%** |" in answer
+    assert "| **Total** | **23** | **14** | **0** | **0** | **9** | **60,87%** |" in answer
     assert msg("group_training_archived", "id", count=16) in answer and "Marketing" in answer
 
 
@@ -2505,3 +2506,471 @@ def test_a_dated_question_picks_its_campaigns_by_day(prompt, args, expected):
     from agent.agent import _campaign_from_question
     _campaign_from_question(args, prompt)
     assert args == expected
+
+
+
+@pytest.mark.parametrize("question,file_type", [
+    ("export ke excel daftar orang di campaign 2026-10-07", "xlsx"),
+    ("export users to xlsx", "xlsx"),
+    ("export csv siapa saja yang past due", "csv"),
+    ("export ke csv, bisa dibuka di excel", "csv"),   # both named: csv
+    ("unduh data pengguna", "csv"),
+])
+async def test_the_file_type_follows_the_question(monkeypatch, question, file_type):
+    made = {"dataset": "users", "rows": 2, "download_url": "/exports/" + "a" * 32 + ".csv?name=u.csv", "file_name": "u.csv"}
+    session = FakeSession({"export_csv": made})
+    session.tools.append(SimpleNamespace(name="export_csv", description="d", input_schema={"type": "object"}))
+    llm = FakeLLM([reply(calls=[tool_call("x", "export_csv", '{"console": "main", "dataset": "users", "file_type": "csv"}')],
+                         finish="tool_calls"), reply("**File siap.**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(question)
+    assert next(args for name, args in session.calls if name == "export_csv")["file_type"] == file_type
+
+
+def test_attachments_are_shown_once_and_model_paths_go():
+    from agent.agent import _with_attachments
+    csv_file = {"rows": 944, "download_url": "/exports/" + "a" * 32 + ".csv?name=p.csv", "file_name": "p.csv"}
+    again = {"rows": 944, "download_url": "/exports/" + "b" * 32 + ".csv?name=p.csv", "file_name": "p.csv"}
+    excel = {"rows": 3, "download_url": "/exports/" + "c" * 32 + ".xlsx?name=u.xlsx", "file_name": "u.xlsx"}
+    answer = ("**Jawaban.**\n\nFile CSV sudah diunduh berisi 944 baris.\n"
+              "Download link: /exports/" + "a" * 32 + ".csv\nSelesai.")
+    out = _with_attachments(answer, [csv_file, again, excel], "id")
+    # live: two export calls in one answer showed the same file twice
+    assert out.count("Unduh CSV") == 1 and "/exports/" + "b" * 32 in out and "/exports/" + "a" * 32 not in out
+    assert "Download link" not in out and "File CSV siap diunduh berisi 944 baris." in out and "Selesai." in out
+    assert msg("download_xlsx", "id", file="u.xlsx", rows=3) in out
+    en = _with_attachments("**Done.**\n\nThe file has been downloaded.", [excel], "en")
+    assert "The file is ready to download." in en and msg("download_xlsx", "en", file="u.xlsx", rows=3) in en
+
+
+@pytest.mark.parametrize("sentence,dropped", [
+    ("Fakta utama dan Kenapa berhenti di sini sesuai aturan.", True),     # live
+    ("I stopped the answer here as per the rules.", True),
+    ("Kebijakan password sesuai aturan perusahaan.", False),              # not about the answer
+    ("402 orang masih Past Due.", False),
+])
+def test_talk_about_the_rules_is_dropped(sentence, dropped):
+    from agent.agent import _without_rule_talk
+    out = _without_rule_talk("**Jawaban.**\n\n" + sentence + "\n\nAkhir.")
+    assert (sentence not in out) is dropped and out.startswith("**Jawaban.**") and out.endswith("Akhir.")
+
+
+@pytest.mark.parametrize("sentence,wrong", [
+    ("Empat orang yang diarchive tidak dihitung.", True),                  # live: really 24
+    ("Dua puluh empat orang yang diarsipkan tidak dihitung.", False),
+    ("Dari 944 orang yang dihitung, ada 24 orang arsip yang tidak dihitung.", False),
+    ("4 archived people are not counted.", True),
+    ("Twenty-four archived people are not counted.", False),
+    ("Orang yang diarsipkan tidak dihitung.", False),                      # no number
+    ("402 orang masih Past Due.", False),                                  # not about archived people
+])
+def test_archived_counts_must_be_the_real_one(sentence, wrong):
+    from agent.agent import _wrong_archived_count
+    assert _wrong_archived_count(sentence, 24) is wrong
+    assert _wrong_archived_count(sentence, 0) is False
+
+
+@pytest.mark.parametrize("prompt,tool", [
+    ("risk score itu apa?", "explain_metric"),
+    ("apa itu phish-prone percentage?", "explain_metric"),
+    ("bedanya risk score dengan phish-prone apa?", "explain_metric"),
+    ("what does past due mean?", "explain_metric"),
+    ("how is the phish-prone percentage calculated?", "explain_metric"),
+    ("grup apa saja yang ada?", "find_group"),
+    ("list all groups", "find_group"),
+    ("departemen apa saja yang terdaftar?", "list_dimension_values"),
+    ("which job titles do we have?", "list_dimension_values"),
+])
+async def test_lookup_questions_reach_their_tool(monkeypatch, prompt, tool):
+    session = FakeSession({tool: {"headline": "ok", "definitions": [{"metric": "x", "text": "y"}]}})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"})
+                         for n in ("explain_metric", "find_group", "list_dimension_values", "account_risk_overview"))
+    llm = FakeLLM([reply("Jawaban dari pengetahuan umum."), reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert tool in [name for name, _ in session.calls]
+
+
+@pytest.mark.parametrize("prompt", [
+    "risk score kita sekarang berapa?",             # a value, not a definition
+    "what is the risk score now?",
+    "phish-prone kita dibanding benchmark industri",
+    "grup mana yang paling berisiko?",
+])
+def test_value_questions_are_not_definition_questions(prompt):
+    from agent.agent import TOPIC_TOOLS
+    topic = next(t for t in TOPIC_TOOLS if t[1] == "explain_metric")
+    assert not topic[0].search(prompt)
+    groups = next(t for t in TOPIC_TOOLS if t[1] == "find_group")
+    assert not groups[0].search(prompt)
+
+
+async def test_definitions_follow_the_chat_language_and_campaign_search_keeps_old_campaigns(monkeypatch):
+    session = FakeSession({"explain_metric": {"definitions": [{"metric": "x", "text": "y"}]}, "find_campaign": {"headline": "ok"}})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in ("explain_metric", "find_campaign"))
+    llm = FakeLLM([reply(calls=[tool_call("e", "explain_metric", '{"name": "risk_score", "language": "id"}'),
+                                tool_call("f", "find_campaign", '{"console": "main", "query": "invoice"}')], finish="tool_calls"),
+                   reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask("What does risk score mean, and which campaign was the invoice test?", language="en")
+    calls = dict(session.calls)
+    assert calls["explain_metric"]["language"] == "en"
+    # no default past-year period: an invoice campaign from 2024 is still found
+    assert "start_date" not in session.raw_calls[[n for n, _ in session.raw_calls].index("find_campaign")][1]
+
+
+async def test_a_lookup_question_gets_no_other_data_forced(monkeypatch):
+    # live: "departemen apa saja yang terdaftar" also got training per group ("terdaftar"); "risk score itu apa" got today's score
+    for prompt, tool in (("departemen apa saja yang terdaftar?", "list_dimension_values"),
+                         ("risk score itu apa? bedanya dengan phish-prone apa?", "explain_metric")):
+        session = FakeSession({tool: {"headline": "ok", "values": [], "definitions": [{"metric": "x", "text": "y"}]}})
+        session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"})
+                             for n in ("explain_metric", "list_dimension_values", "training_by_group", "account_risk_overview"))
+        llm = FakeLLM([reply(calls=[tool_call("a", tool, '{"console": "main", "name": "risk_score", "attribute": "department"}')],
+                             finish="tool_calls"), reply("**Jawaban.**")])
+        await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+        assert [name for name, _ in session.calls] == [tool], prompt
+
+
+async def test_group_status_and_campaign_month_come_from_the_question(monkeypatch):
+    session = FakeSession({"find_group": {"headline": "ok", "groups": [], "total": 0}, "find_campaign": {"headline": "ok", "campaigns": []}})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in ("find_group", "find_campaign"))
+    llm = FakeLLM([reply(calls=[tool_call("g", "find_group", '{"console": "main", "status": "all"}'),
+                                tool_call("c", "find_campaign", '{"console": "main", "query": "Oktober 2026"}')], finish="tool_calls"),
+                   reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask("grup apa saja yang ada, dan kampanye phishing bulan Oktober 2026 yang mana?")
+    calls = dict(session.calls)
+    # live: status all gave 47 groups instead of the 28 in use; "Oktober 2026" as a name matched nothing
+    assert calls["find_group"]["status"] == "active"
+    assert "query" not in calls["find_campaign"] and calls["find_campaign"]["start_date"] == "2026-10-01"
+
+
+@pytest.mark.parametrize("tool,result,expected", [
+    ("find_group", {"groups": [{"id": 1, "name": "Finance", "type": "console_group", "members": 12, "risk_score": 44.2,
+                                "risk_level": "Medium"}], "total": 3},
+     ["| No | Grup | Anggota | Risk score | Level | Tipe |", "| 1 | Finance | 12 | 44,2 | Medium | console_group |",
+      msg("breakdown_more", "id", n=2)]),
+    ("find_campaign", {"kind": "phishing", "campaigns": [{"name": "Monthly", "status": "Active", "last_run": "2026-10-05",
+                                                          "tests_run": 12, "last_phish_prone_percent": 25.0}], "total": 1},
+     ["| 1 | Monthly | Active | 2026-10-05 | 12 | 25% |"]),
+    ("find_campaign", {"kind": "training", "campaigns": [{"name": "Awareness", "status": "Completed", "start_date": "2026-10-07",
+                                                          "end_date": "2026-11-07", "completion_percent": 57.4}], "total": 1},
+     ["| No | Kampanye | Status | Mulai | Selesai | % selesai |", "| 1 | Awareness | Completed | 2026-10-07 | 2026-11-07 | 57,4% |"]),
+    ("list_dimension_values", {"values": [{"value": "Finance", "users": 2}], "distinct": 98},
+     ["| 1 | Finance | 2 |", msg("breakdown_more", "id", n=97)]),
+])
+def test_lookup_tables_are_built_in_code(tool, result, expected):
+    from agent.agent import _with_breakdown_table
+    out = _with_breakdown_table("**Jawaban.**\n\n| a | b |\n|---|---|\n| x | y |\n\nPenjelasan.", tool, result, "id")
+    assert out.startswith("**Jawaban.**") and "| x | y |" not in out and out.endswith("Penjelasan.")
+    for part in expected:
+        assert part in out
+
+
+def test_group_lookup_drops_the_models_superlatives():
+    from agent.agent import _with_breakdown_table
+    out = _with_breakdown_table("**47 grup.**\n\n- Anggota terbanyak: Grup Contoh (27 anggota)\n- Grup aktif ada 28.",
+                                "find_group", {"groups": [{"name": "A", "members": 1}], "total": 1}, "id")
+    assert "terbanyak" not in out and "- Grup aktif ada 28." in out
+
+
+REPORT_TOOLS = ("phishing_by_attribute", "training_by_attribute", "manager_report", "group_report", "organisation_summary",
+                "phishing_by_group", "training_by_group", "risk_by_group", "account_risk_overview")
+
+
+@pytest.mark.parametrize("prompt,tool", [
+    ("phish-prone per departemen gimana?", "phishing_by_attribute"),
+    ("which job titles click phishing emails the most?", "phishing_by_attribute"),
+    ("training per departemen sudah selesai berapa?", "training_by_attribute"),
+    ("training completion by location", "training_by_attribute"),
+    ("per manager, siapa yang timnya paling banyak telat training?", "manager_report"),
+    ("which manager's team failed phishing?", "manager_report"),
+    ("laporan lengkap grup Finance kuartal ini", "group_report"),
+    ("full report for group IT", "group_report"),
+    ("ringkasan keamanan perusahaan kami", "organisation_summary"),
+    ("how are we doing overall?", "organisation_summary"),
+])
+async def test_report_questions_reach_only_their_tool(monkeypatch, prompt, tool):
+    session = FakeSession({t: {"headline": "ok", "rows": []} for t in REPORT_TOOLS})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in REPORT_TOOLS)
+    llm = FakeLLM([reply("Jawaban."), reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    # live (phase 1): a lookup question also got the per-group tool forced; reports must not either
+    assert [name for name, _ in session.calls] == [tool], prompt
+
+
+def test_risk_per_division_stays_with_the_group_risk_tool():
+    from agent.agent import _first_topic
+    # an existing audit question: a risk question, not phishing or training
+    assert _first_topic("divisi mana yg paling rawan") not in {"phishing_by_attribute", "training_by_attribute", "manager_report"}
+
+
+async def test_report_arguments_come_from_the_question(monkeypatch):
+    session = FakeSession({t: {"headline": "ok", "rows": []} for t in REPORT_TOOLS})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in REPORT_TOOLS)
+    llm = FakeLLM([reply(calls=[tool_call("a", "training_by_attribute", '{"console": "main", "attribute": "department", "include_archived": true}'),
+                                tool_call("b", "phishing_by_attribute", '{"console": "main", "attribute": "department"}')], finish="tool_calls"),
+                   reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask("training dan phishing per departemen untuk campaign 2026-10-07")
+    calls = dict(session.calls)
+    assert calls["training_by_attribute"]["campaign_date"] == "2026-10-07" and calls["training_by_attribute"]["include_archived"] is False
+    # phishing per field: the latest test unless a period is named (like per group), so no default year
+    raw = dict(session.raw_calls)
+    assert "start_date" not in raw["phishing_by_attribute"]
+
+
+@pytest.mark.parametrize("tool,result,expected", [
+    ("phishing_by_attribute", {"rows": [{"value": "Finance", "people": 2, "delivered": 2, "phish_prone_percent": 100.0,
+                                         "failed_percent": 50.0, "report_percent": 50.0, "small_sample": True}], "total_rows": 1},
+     ["| Finance * | 2 | 2 | 100% | 50% | 50% |", msg("small_sample_note", "id")]),
+    ("training_by_attribute", {"rows": [{"value": "IT", "total": 9, "completed": 4, "in_progress": 1, "not_started": 2,
+                                         "past_due": 2, "percent_complete": 44.44, "small_sample": False}], "total_rows": 3},
+     ["| IT | 9 | 4 | 1 | 2 | 2 | 44,44% |", msg("breakdown_more", "id", n=2)]),
+    ("manager_report", {"mode": "managers", "rows": [{"manager": "Rina", "team": 2, "people_with_past_due": 1, "past_due_modules": 1,
+                                                      "people_who_failed_phishing": 1, "failed_phishing_emails": 2}], "total_rows": 1},
+     ["| Rina | 2 | 1 | 1 | 1 | 2 |"]),
+    ("manager_report", {"mode": "team", "rows": [{"name": "Ana A", "email": "ana@example.com", "job_title": "Analyst",
+                                                  "past_due_modules": 1, "failed_phishing_emails": 2}], "total_rows": 1},
+     ["| No | Nama | Email | Jabatan | Modul Past Due | Email phishing gagal |", "| 1 | Ana A | ana@example.com | Analyst | 1 | 2 |"]),
+    ("group_report", {"rows": [{"name": "Ana A", "job_title": "Analyst", "risk_score": 55.0, "risk_level": "Critical"}]},
+     ["| 1 | Ana A | Analyst | 55 | Critical |"]),
+    ("organisation_summary", {"rows": [{"group": "Finance", "people": 2, "risk_score": 50.0, "risk_level": "High",
+                                        "phish_prone_percent": 33.33, "report_percent": 20.0, "percent_complete": 66.67,
+                                        "past_due": 1}], "total_rows": 1},
+     ["| Finance | 2 | 50 | High | 33,33% | 20% | 66,67% | 1 |"]),
+])
+def test_report_tables_are_built_in_code(tool, result, expected):
+    from agent.agent import _with_breakdown_table
+    out = _with_breakdown_table("**Jawaban.**\n\n| a | b |\n|---|---|\n| x | y |\n\nPenjelasan.", tool, result, "id")
+    assert out.startswith("**Jawaban.**") and "| x | y |" not in out and out.endswith("Penjelasan.")
+    for part in expected:
+        assert part in out
+
+
+async def test_an_empty_user_field_falls_back_to_the_groups(monkeypatch):
+    # live: "phish-prone per departemen" on an account with no departments ended with "shall I show the groups?"
+    empty = {"error": True, "message": "No active user has a department filled in KnowBe4 (55 active users), so there is nothing "
+                                        "to break down by. If teams are set up as KnowBe4 groups, use phishing_by_group instead."}
+    session = FakeSession({"phishing_by_attribute": empty, "phishing_by_group": {"headline": "ok", "groups": [], "totals": {}}})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in REPORT_TOOLS)
+    llm = FakeLLM([reply(calls=[tool_call("a", "phishing_by_attribute", '{"console": "main", "attribute": "department"}')],
+                         finish="tool_calls"),
+                   reply("Tidak ada data departemen. Apakah Anda ingin melihat per grup?"), reply("**Per grup.**")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("phish-prone per departemen?")
+    assert [name for name, _ in session.calls] == ["phishing_by_attribute", "phishing_by_group"]
+    assert msg("attribute_empty_groups", "id", field="Departemen") in answer
+
+
+def test_small_groups_are_marked_in_the_organisation_table():
+    from agent.agent import _with_breakdown_table
+    out = _with_breakdown_table("**x**", "organisation_summary", {"rows": [{"group": "Onboard", "people": 1, "risk_score": 40.2,
+                                "risk_level": "Low", "phish_prone_percent": 100.0, "report_percent": 0.0, "percent_complete": 0.0,
+                                "past_due": 2, "small_sample": True}], "total_rows": 1}, "id")
+    assert "| Onboard * | 1 |" in out and msg("small_sample_note", "id") in out
+
+
+def test_the_group_fallback_says_why():
+    from agent.agent import _after_first_line
+    out = _after_first_line("**Tes phishing X: 4 email.**\n\n| a |\n|---|", "*" + msg("attribute_empty_groups", "id",
+                            field=msg("field_department", "id")) + "*")
+    assert out.splitlines()[2] == "*Departemen belum diisi untuk pengguna di KnowBe4, jadi ini hasil per grup KnowBe4.*"
+    assert out.endswith("| a |\n|---|") and _after_first_line("**Only.**", "*x*") == "**Only.**\n\n*x*"
+
+
+async def test_a_risk_question_is_not_answered_with_phishing_per_department(monkeypatch):
+    # live: "which dept is most vulnerable" got phishing_by_attribute, then the group fallback
+    session = FakeSession({"risk_by_group": {"headline": "ok", "groups": []}})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in REPORT_TOOLS)
+    llm = FakeLLM([reply(calls=[tool_call("a", "phishing_by_attribute", '{"console": "main", "attribute": "department"}')],
+                         finish="tool_calls"),
+                   reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask("which dept is most vulnerable")
+    # live: refused, the model asked again up to four times; the risk call is made in code instead
+    assert session.calls == [("risk_by_group", {"console": "main", "by": "department"})]
+
+
+
+async def test_risk_per_an_empty_field_is_answered_per_group(monkeypatch):
+    # live: risk_by_group said "use by=group" and the model sent by=department six times, then hit the round limit
+    class ByField(FakeSession):
+        async def call_tool(self, name, arguments):
+            if name == "risk_by_group" and arguments.get("by") == "department":
+                self.calls.append((name, dict(arguments)))
+                text = json.dumps({"by": "department", "groups": [], "note": "The department field is empty for every active user "
+                                   "in KnowBe4, so there is no department breakdown. Use by=group."})
+                return SimpleNamespace(is_error=False, structured_content=None, content=[SimpleNamespace(text=text)])
+            return await super().call_tool(name, arguments)
+
+    session = ByField({"risk_by_group": {"by": "group", "groups": [{"name": "IT", "risk_score": 40.0}]}})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in REPORT_TOOLS)
+    llm = FakeLLM([reply(calls=[tool_call("a", "risk_by_group", '{"console": "main", "by": "department"}')], finish="tool_calls"),
+                   reply("**IT paling berisiko.**")])
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("departemen mana yang paling rawan?")
+    assert [args.get("by") for name, args in session.calls if name == "risk_by_group"] == ["department", "group"]
+    assert msg("attribute_empty_groups", "id", field="Departemen") in answer
+
+
+
+async def test_a_why_follow_up_gets_data_not_a_definition(monkeypatch):
+    # live: "yg 0% itu kenapa" after a training answer was answered with explain_metric's definition of completion
+    session = FakeSession({"training_completion_summary": {"headline": "ok", "campaigns": []},
+                           "explain_metric": {"definitions": [{"metric": "completion", "text": "x"}]}})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"})
+                         for n in ("explain_metric", "training_completion_summary"))
+    llm = FakeLLM([reply(calls=[tool_call("a", "explain_metric", '{"name": "completion"}')], finish="tool_calls"),
+                   reply(calls=[tool_call("b", "training_completion_summary", '{"console": "main"}')], finish="tool_calls"),
+                   reply("**Karena belum ada yang selesai.**")])
+    history = [{"role": "user", "content": "Bagaimana penyelesaian training?"},
+               {"role": "assistant", "content": "[Data used: training_completion_summary {}]\n\n**Rata-rata 18,14%.**"}]
+    await make_agent(make_config(monkeypatch), llm, session).ask("yg 0% itu kenapa", history=history)
+    assert [name for name, _ in session.calls] == ["training_completion_summary"]
+    # a real definition question with "why" still gets the definition
+    from agent.agent import _first_topic
+    assert _first_topic("kenapa risk score itu apa sih artinya") == "explain_metric"
+
+
+
+PHASE3_TOOLS = ("phishing_trend", "phishing_by_template", "reporting_behaviour", "phishing_click_details", "templates",
+                "phishing_test_detail", "phishing_campaign_summary", "reported_emails", "group_risk_trend", "account_risk_overview")
+
+
+@pytest.mark.parametrize("prompt,tool", [
+    ("tren phish-prone 12 bulan terakhir", "phishing_trend"),
+    ("phishing clicks per month this year", "phishing_trend"),
+    ("template mana yang paling banyak menipu?", "phishing_by_template"),
+    ("which templates fooled the most people?", "phishing_by_template"),
+    ("berapa persen yang melapor email phishing?", "reporting_behaviour"),
+    ("who never reports phishing emails?", "reporting_behaviour"),
+    ("kebanyakan klik dari HP atau laptop?", "phishing_click_details"),
+    ("which browsers did people click on?", "phishing_click_details"),
+])
+async def test_phase3_questions_reach_only_their_tool(monkeypatch, prompt, tool):
+    session = FakeSession({t: {"headline": "ok", "rows": []} for t in PHASE3_TOOLS})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in PHASE3_TOOLS)
+    llm = FakeLLM([reply("Jawaban."), reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert [name for name, _ in session.calls] == [tool], prompt
+
+
+def test_existing_template_and_trend_questions_keep_their_tools():
+    from agent.agent import _first_topic
+    # the template library and a group's risk trend are not phishing results
+    assert _first_topic("template phishing apa saja yang tersedia?") == "templates"
+    assert _first_topic("tren risiko grup IT") == "group_risk_trend"
+
+
+@pytest.mark.parametrize("tool,result,expected", [
+    ("phishing_trend", {"rows": [{"period": "2026-09", "tests": 1, "delivered": 4, "phish_prone_percent": 50.0, "report_percent": 25.0}],
+                        "total_rows": 1}, ["| Periode | Tes |", "| 2026-09 | 1 | 4 | 50% | 25% |"]),
+    ("phishing_by_template", {"rows": [{"template": "Invoice due", "type": "Phishing", "difficulty": 1, "sent": 2,
+                                        "phish_prone_percent": 100.0, "report_percent": 50.0, "small_sample": True}], "total_rows": 1},
+     ["| 1 | Invoice due * | Phishing | 1 | 2 | 100% | 50% |"]),
+    ("reporting_behaviour", {"rows": [{"name": "Citra C", "received": 2, "failed": 1}], "total_rows": 1},
+     ["| No | Belum pernah melapor |", "| 1 | Citra C | 2 | 1 |"]),
+    ("phishing_click_details", {"rows": [{"kind": "os", "value": "Android", "failures": 2, "percent": 66.67}]},
+     ["| os | Android | 2 | 66,67% |"]),
+])
+def test_phase3_tables_are_built_in_code(tool, result, expected):
+    from agent.agent import _with_breakdown_table
+    out = _with_breakdown_table("**Jawaban.**\n\n| a | b |\n|---|---|\n| x | y |\n\nPenjelasan.", tool, result, "id")
+    assert "| x | y |" not in out
+    for part in expected:
+        assert part in out
+
+
+
+@pytest.mark.parametrize("prompt,tool,refused", [
+    ("phishing Q3 2026 hasilnya gmn", "phishing_trend", True),            # live: the monthly trend for a period's results
+    ("phishing 2026 onwards brp phish prone nya", "phishing_trend", True),
+    ("org yg klik phishing terakhir siapa", "phishing_click_details", True),  # live: the device split for "who clicked"
+    ("tren phish-prone 12 bulan terakhir", "phishing_trend", False),
+    ("kebanyakan klik dari HP atau laptop?", "phishing_click_details", False),
+    ("hasil phishing terakhir gimana?", "phishing_by_template", True),
+    ("berapa yang klik phishing terakhir?", "reporting_behaviour", True),
+    ("berapa persen yang melapor?", "reporting_behaviour", False),
+])
+async def test_phase3_tools_only_for_their_own_questions(monkeypatch, prompt, tool, refused):
+    session = FakeSession({t: {"headline": "ok", "rows": []} for t in PHASE3_TOOLS})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in PHASE3_TOOLS)
+    llm = FakeLLM([reply(calls=[tool_call("a", tool, '{"console": "main"}')], finish="tool_calls"), reply("**ok**"), reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert (tool not in [name for name, _ in session.calls]) is refused
+
+
+
+PHASE4_TOOLS = ("subscription_status", "executive_report", "policy_acknowledgement", "product_status", "organisation_summary",
+                "overdue_training", "training_completion_summary")
+
+
+@pytest.mark.parametrize("prompt,tool", [
+    ("lisensi kami habis kapan? seat terpakai berapa?", "subscription_status"),
+    ("when does our KnowBe4 subscription end?", "subscription_status"),
+    ("buatkan laporan bulanan untuk direksi", "executive_report"),
+    ("monthly report for management", "executive_report"),
+    ("siapa yang belum menyetujui kebijakan password?", "policy_acknowledgement"),
+    ("who has not acknowledged the acceptable use policy?", "policy_acknowledgement"),
+])
+async def test_phase4_questions_reach_only_their_tool(monkeypatch, prompt, tool):
+    session = FakeSession({t: {"headline": "ok", "rows": []} for t in PHASE4_TOOLS})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in PHASE4_TOOLS)
+    llm = FakeLLM([reply("Jawaban."), reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert [name for name, _ in session.calls] == [tool], prompt
+
+
+def test_the_product_list_keeps_lisensi_alone():
+    from agent.agent import _first_topic
+    # "which licences do we have" is the product list; the end date and seats are the subscription
+    assert _first_topic("lisensi produk knowbe4 apa saja yang kita punya?") == "product_status"
+    assert _first_topic("ringkasan keamanan perusahaan kami") == "organisation_summary"
+
+
+@pytest.mark.parametrize("prompt,tool,refused", [
+    ("ringkasan keamanan perusahaan kami", "executive_report", True),      # the organisation summary, not a monthly report
+    ("berapa risk score sekarang?", "subscription_status", True),
+    ("siapa yang belum training?", "policy_acknowledgement", True),
+    ("laporan bulanan untuk direksi", "executive_report", False),
+])
+async def test_phase4_tools_only_for_their_own_questions(monkeypatch, prompt, tool, refused):
+    session = FakeSession({t: {"headline": "ok", "rows": []} for t in PHASE4_TOOLS})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in PHASE4_TOOLS)
+    llm = FakeLLM([reply(calls=[tool_call("a", tool, '{"console": "main"}')], finish="tool_calls"), reply("**ok**"), reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(prompt)
+    assert (tool not in [name for name, _ in session.calls]) is refused
+
+
+async def test_the_monthly_report_gets_the_month_named_in_the_question(monkeypatch):
+    session = FakeSession({"executive_report": {"headline": "ok", "rows": []}})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in PHASE4_TOOLS)
+    llm = FakeLLM([reply(calls=[tool_call("a", "executive_report", '{"console": "main"}')], finish="tool_calls"), reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask("laporan bulanan untuk direksi bulan Oktober 2026")
+    call = dict(session.calls)["executive_report"]
+    assert call["start_date"] == "2026-10-01" and call["end_date"] == "2026-10-31"
+    # without a month named: no default year, so the tool takes the last full month
+    session2 = FakeSession({"executive_report": {"headline": "ok", "rows": []}})
+    session2.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"}) for n in PHASE4_TOOLS)
+    llm2 = FakeLLM([reply(calls=[tool_call("a", "executive_report", '{"console": "main"}')], finish="tool_calls"), reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm2, session2).ask("laporan bulanan untuk direksi")
+    assert "start_date" not in dict(session2.raw_calls)["executive_report"]
+
+
+@pytest.mark.parametrize("tool,result,expected", [
+    ("executive_report", {"rows": [{"group": "Finance", "people": 2, "risk_score": 50.0, "risk_level": "High", "phish_prone_percent": 50.0,
+                                    "report_percent": 0.0, "percent_complete": 100.0, "past_due": 0, "small_sample": True}], "total_rows": 2},
+     ["| Grup paling berisiko |", "| Finance * | 2 | 50 | High | 50% | 0% | 100% | 0 |"]),
+    ("policy_acknowledgement", {"rows": [{"policy": "Password Policy", "enrolled": 2, "acknowledged": 1, "not_acknowledged": 1,
+                                          "percent_acknowledged": 50.0}], "total_rows": 1},
+     ["| Kebijakan | Terdaftar |", "| Password Policy | 2 | 1 | 1 | 50% |"]),
+])
+def test_phase4_tables_are_built_in_code(tool, result, expected):
+    from agent.agent import _with_breakdown_table
+    out = _with_breakdown_table("**Jawaban.**\n\nPenjelasan.", tool, result, "id")
+    for part in expected:
+        assert part in out
+
+
+
+@pytest.mark.parametrize("prompt", ["yg sering ketipu phishing siapa ya", "siapa yang gagal phishing lebih dari sekali?",
+                                    "who keeps clicking phishing emails?", "repeat offenders on phishing",
+                                    "yg termakan simulasi phishing lebih dr sekali"])
+def test_repeat_failure_wording_reaches_its_tool(prompt):
+    from agent.agent import _first_topic
+    # casual #19 got the risk ranking twice: the repeat-failure tool is now called in code when the model skips it
+    assert _first_topic(prompt) == "repeat_phishing_failures"

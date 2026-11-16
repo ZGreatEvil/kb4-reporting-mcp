@@ -17,6 +17,10 @@ import matplotlib
 
 matplotlib.use("Agg")  # no window, safe in a server process
 import matplotlib.pyplot as plt  # noqa: E402
+from openpyxl import Workbook  # noqa: E402
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE  # noqa: E402
+from openpyxl.styles import Font  # noqa: E402
+from openpyxl.utils import get_column_letter  # noqa: E402
 
 from kb4_mcp.breakdowns import campaign_people_rows  # noqa: E402
 from kb4_mcp.products import _all_messages, reported_emails  # noqa: E402
@@ -326,13 +330,43 @@ def _cell(value: Any) -> Any:
     return value
 
 
+FILE_TYPES = ("csv", "xlsx")
+
+
+def _write_xlsx(path: Path, header: list[str], rows: list[list[Any]], title: str) -> None:
+    """an excel file with a bold, frozen and filterable header row"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = title[:31]  # excel's limit for sheet names
+    ws.append(header)
+    for row in rows:
+        # control characters make openpyxl refuse the whole file
+        ws.append([ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v for v in row])
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            # openpyxl stores text that starts with "=" as a formula; names and subjects must stay text
+            if cell.data_type == "f":
+                cell.data_type = "s"
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    for i, name in enumerate(header, start=1):
+        longest = max([len(str(name))] + [len(str(r[i - 1])) for r in rows[:500] if i - 1 < len(r) and r[i - 1] is not None])
+        ws.column_dimensions[get_column_letter(i)].width = min(max(longest + 2, 8), 60)
+    wb.save(path)
+
+
 async def export_csv(
     kb: Any, console: str, dataset: str, user_id: int | None = None, status: str = "active",
     start_date: str | None = None, end_date: str | None = None, campaign: str | None = None, campaign_date: str | None = None,
-    groups: str | None = None, text: str | None = None, include_archived: bool = False,
+    groups: str | None = None, text: str | None = None, include_archived: bool = False, file_type: str = "csv",
 ) -> dict[str, Any]:
     if problem := _bad_period(start_date, end_date):
         return {"error": True, "message": problem}
+    file_type = str(file_type or "csv").strip().lower().lstrip(".")
+    if file_type not in FILE_TYPES:
+        return {"error": True, "message": f"file_type must be one of: {', '.join(FILE_TYPES)}."}
     if dataset not in DATASETS:
         return {"error": True, "message": f"Unknown dataset '{dataset}'. Use one of: {', '.join(DATASETS)}."}
 
@@ -371,7 +405,7 @@ async def export_csv(
         rows = [[g["group"], g["total"], g["completed"], g["in_progress"], g["not_started"], g["past_due"], g["percent_complete"],
                  g.get("archived_not_counted", 0)] for g in data["groups"]]
         t = data["totals"]
-        rows.append(["Total (each person once)", t["total"], t["completed"], t["in_progress"], t["not_started"], t["past_due"],
+        rows.append(["Total (per campaign, as in KnowBe4)", t["total"], t["completed"], t["in_progress"], t["not_started"], t["past_due"],
                      t["percent_complete"], data.get("archived_not_counted", 0)])
     elif dataset == "campaign_people":
         # one row per person, every person: "active" is the users dataset's default, so it means everyone here
@@ -381,8 +415,9 @@ async def export_csv(
             return found
         header = ["name", "email", "groups", "status", "modules_completed", "modules_enrolled", "completed_on", "campaign", "modules"]
         names = " + ".join(str(c.get("name") or "").strip() for c in found["picked"])
+        # one row per person per campaign, as KnowBe4 counts
         rows = [[r["name"], r["email"], "; ".join(r["groups"]), r["status"] + (" (archived)" if r["archived"] else ""),
-                 r["modules_completed"], r["modules_enrolled"], r["completed_on"], names,
+                 r["modules_completed"], r["modules_enrolled"], r["completed_on"], r["campaign"],
                  "; ".join(f"{m.get('module')} ({m.get('status')})" for m in r["modules"])] for r in found["rows"]]
     elif dataset == "reported_emails":
         messages, _ = await _all_messages(kb, console)
@@ -398,19 +433,24 @@ async def export_csv(
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     _cleanup(EXPORT_DIR)
     file_id = uuid.uuid4().hex
-    path = EXPORT_DIR / f"{file_id}.csv"
-    # utf-8 with bom so excel shows indonesian names correctly
-    with path.open("w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        writer.writerow(header)
-        writer.writerows([[_cell(v) for v in row] for row in rows])
+    path = EXPORT_DIR / f"{file_id}.{file_type}"
+    if file_type == "xlsx":
+        _write_xlsx(path, header, rows, dataset)
+    else:
+        # utf-8 with bom so excel shows indonesian names correctly
+        with path.open("w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(header)
+            writer.writerows([[_cell(v) for v in row] for row in rows])
     suffix = f"_user{user_id}" if dataset == "risk_history" and user_id else ""
-    file_name = f"{console}_{dataset}{suffix}_{date.today().isoformat()}.csv"
-    url = f"/exports/{file_id}.csv?name={file_name}"
+    file_name = f"{console}_{dataset}{suffix}_{date.today().isoformat()}.{file_type}"
+    url = f"/exports/{file_id}.{file_type}?name={file_name}"
     return {
         "dataset": dataset,
+        "file_type": file_type,
         **({"status_filter": status or "all"} if dataset == "users" else {}),
-        **({"status_filter": found["status"], "campaign": names} if dataset == "campaign_people" else {}),
+        **({"status_filter": found["status"], "campaign": names, "different_people": found["different_people"]}
+           if dataset == "campaign_people" else {}),
         # a campaign file holds that campaign's people, whatever the default period was
         "period": ("today's users (no period)" if dataset == "users" else
                    "the campaign's own people (no period filter)" if dataset in ("training_by_group", "campaign_people") else
