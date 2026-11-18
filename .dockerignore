@@ -1,0 +1,36 @@
+# secrets and local config never go into the build context
+.env
+.env.*
+!.env.example
+config/consoles.yaml
+*.pem
+*.key
+.kb4_usage.json
+# agent/tooling notes and planning files
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+AGENTS.md
+instructions.md
+*_BRIEF.md
+*.prompt.md
+.cursor/
+.windsurf/
+.vscode/
+# local builds, caches and runtime files
+.git/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+*.zip
+*.bak
+*.dump
+desktop.ini
+knowledge/
+exports/
+web/static/charts/
+tests/
+docs/

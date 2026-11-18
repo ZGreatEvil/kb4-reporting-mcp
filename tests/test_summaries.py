@@ -323,3 +323,10 @@ async def test_one_active_exact_name_is_chosen_over_archived_and_partial_matches
     # two active people with exactly the same name: still ask
     both = await summaries.find_user(KB(), "main", "Bayu Santoso")
     assert both["ask_user"] is True and "chosen" not in both
+
+
+@pytest.mark.parametrize("day,months", [("2026-05-11", 6), ("2026-05-17", 5), ("2026-11-16", 0), ("2025-11-16", 12), ("bad", None)])
+def test_months_ago_counts_whole_months(day, months):
+    from datetime import date
+
+    assert summaries._months_ago(day, date(2026, 11, 16)) == months

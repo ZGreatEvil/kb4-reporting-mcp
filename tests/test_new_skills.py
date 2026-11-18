@@ -254,7 +254,8 @@ async def test_risk_trend_for_a_period():
 
     result = await summaries.account_risk_overview(KB(), "main", start_date="2026-04-01")
     p = result["period"]
-    assert (p["snapshots"], p["first_snapshot"], p["last"], p["change"]) == (2, {"date": "2026-04-05", "score": 44.0}, {"date": "now", "score": 39.4}, -4.6)
+    first = {"date": "2026-04-05", "score": 44.0, "months_ago": summaries._months_ago("2026-04-05")}
+    assert (p["snapshots"], p["first_snapshot"], p["last"], p["change"]) == (2, first, {"date": "now", "score": 39.4}, -4.6)
     assert "From 2026-04-01 to today: 2 weekly snapshots, average 42.5 (lowest 41.0, highest 44.0)" in result["headline"]
     ended = await summaries.account_risk_overview(KB(), "main", start_date="2026-01-01", end_date="2026-04-30")
     assert ended["period"]["last"] == {"date": "2026-04-05", "score": 44.0}  # a past period ends at its own last snapshot

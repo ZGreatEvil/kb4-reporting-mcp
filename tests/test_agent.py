@@ -381,7 +381,7 @@ async def test_done_note_records_paging_and_people(monkeypatch):
     ])
     session = FakeSession({"list_users_page": page})
     agent = make_agent(make_config(monkeypatch), llm, session)
-    events = [e async for e in agent._events("lanjut", "id", stream=False)]
+    events = [e async for e in agent._events("tampilkan user 21 sampai 40", "id", stream=False)]
     assert events[-1]["note"] == "[Data used: list_users_page sort=highest risk first showing 21-40 of 55 next_offset=40]"
     from agent.agent import _note_for
     assert _note_for("find_user", {"query": "rina"}, json.dumps(people)) == "find_user 'rina': 1. Rina A (id 7), 2. Rina B (id 9)"
@@ -440,6 +440,24 @@ async def test_refusal_with_numbers_gets_a_clear_retry_message(monkeypatch):
     from agent.messages import msg
     text = msg("must_use_tool", "id")
     assert "tanpa angka" in text and "penolakan" in text
+
+
+async def test_a_second_answer_without_a_call_gets_the_summary_fetched_in_code(monkeypatch):
+    # live: "tingkat penyelesaian training campaign terakhir?" twice got numbers with no call, then the no-data reply
+    llm = FakeLLM([reply("**Penyelesaian 85%.**"), reply("**Penyelesaian 85%.**"), reply("**Campaign testing: 0 dari 7 selesai.**")])
+    session = FakeSession({"training_completion_summary": {"headline": "testing: 0 of 7 completed", "campaigns": []}})
+    session.tools.append(SimpleNamespace(name="training_completion_summary", description="d", input_schema={"type": "object"}))
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask("Bagaimana tingkat penyelesaian training campaign terakhir?")
+    assert [name for name, _ in session.calls] == ["training_completion_summary"]
+    assert answer.startswith("**Campaign testing: 0 dari 7 selesai.**")
+
+
+def test_the_fallback_tool_follows_the_question_words():
+    from agent.agent import _fallback_tool
+    assert _fallback_tool("tingkat penyelesaian training terakhir") == "training_completion_summary"
+    assert _fallback_tool("hasil phishing terakhir") == "phishing_campaign_summary"
+    assert _fallback_tool("berapa risk score?") == "account_risk_overview"
+    assert _fallback_tool("halo apa kabar") is None
 
 
 async def test_numbers_from_earlier_real_answers_are_allowed(monkeypatch):
@@ -565,9 +583,15 @@ async def test_picking_from_a_list_fetches_that_person(monkeypatch, prompt, expe
 
 
 async def test_number_without_a_people_list_is_not_a_pick(monkeypatch):
+    # with no earlier answer at all, "2" picks nothing: the fixed reply, not a person
+    session = FakeSession()
+    agent = make_agent(make_config(monkeypatch), FakeLLM([]), session)
+    assert await agent.ask("2") == msg("nothing_to_continue", "id") and session.calls == []
+    # after an answer with no people list, it goes to the model as it is
     llm = FakeLLM([reply("Angka 2 itu apa maksudnya?")])
     agent = make_agent(make_config(monkeypatch), llm, FakeSession())
-    assert await agent.ask("2") == "Angka 2 itu apa maksudnya?"
+    history = [{"role": "user", "content": "risk score?"}, {"role": "assistant", "content": "**Skor 38.**"}]
+    assert await agent.ask("2", history=history) == "Angka 2 itu apa maksudnya?"
     assert len(llm.requests) == 1
 
 
@@ -1168,6 +1192,19 @@ async def test_why_follow_up_fetches_the_data_again(monkeypatch):
     assert answer.startswith("**0 dari 4 peserta")
 
 
+async def test_a_follow_up_naming_a_new_period_fetches_again(monkeypatch):
+    # live: "and last quarter?" was answered from the earlier answer, whose test was from this quarter
+    history = [{"role": "user", "content": "how did the latest phishing test go?"},
+               {"role": "assistant", "content": "[Data used: phishing_campaign_summary]\n\n**Latest test \"testing 2\": 25% phish-prone.**"}]
+    llm = FakeLLM([reply("**Latest phishing test in the last quarter was \"testing 2\" with 25% phish-prone rate.**"),
+                   reply("**Last quarter had 1 test.**"), reply("**Last quarter had 1 test.**")])
+    session = FakeSession({"phishing_campaign_summary": {"headline": "1 test", "tests": []}})
+    session.tools.append(SimpleNamespace(name="phishing_campaign_summary", description="d", input_schema={"type": "object"}))
+    await make_agent(make_config(monkeypatch), llm, session).ask("and last quarter?", "en", history)
+    calls = [args for name, args in session.calls if name == "phishing_campaign_summary"]
+    assert calls and calls[0].get("start_date") and calls[0].get("end_date")
+
+
 async def test_why_without_an_earlier_data_note_is_left_to_the_model(monkeypatch):
     llm = FakeLLM([reply("**Karena itu batas KnowBe4.**")])
     session = FakeSession()
@@ -1645,6 +1682,23 @@ def test_closing_offers_are_dropped(offer):
     assert _without_closing_offer(f"{body}\n{offer}\n- 3 grup.").endswith("- 3 grup.")
 
 
+def test_a_list_of_offered_questions_goes_with_its_lead_in():
+    # live 2026-11-16: "Apakah Anda ingin melihat:" followed by three question bullets stayed
+    from agent.agent import _without_closing_offer
+    body = "**Tidak ada training campaign bulan Oktober 2026.**\n\nKenapa:\n- Hasil pencarian kosong."
+    offer = ("Apakah Anda ingin melihat:\n- Training campaign lain (misalnya bulan-bulan sebelumnya)?\n"
+             "- Status training campaign yang sudah berjalan?\n- Data training per departemen atau grup tertentu?")
+    assert _without_closing_offer(f"{body}\n\n{offer}") == body
+    assert _without_closing_offer(f"{body}\n\nWould you like to see:\n1. A chart?\n2. A CSV file?") == body
+    # questions as facts, with no offer above them, stay; so does a fact list under an offer-like heading
+    faq = f"{body}\n\nPertanyaan yang sering muncul:\n- Kenapa 0%?"
+    assert _without_closing_offer(faq) == faq
+    facts = f"{body}\n\n- 3 grup.\n- 55 pengguna."
+    assert _without_closing_offer(facts) == facts
+    # never the whole answer
+    assert _without_closing_offer(offer).startswith("Apakah Anda ingin melihat:")
+
+
 ORDERED = {"items": [{"name": "Compliance in 3 Minutes"}, {"name": "Acceptable Use Policy"}, {"name": "AI Chatbots"}]}
 
 
@@ -2115,9 +2169,18 @@ async def test_an_unknown_console_is_named(monkeypatch, prompt, unknown):
     llm = FakeLLM([reply("**ok**"), reply("**ok**"), reply("**ok**")])
     answer = await make_agent(make_config(monkeypatch), llm, FakeSession()).ask(prompt)
     if unknown:
-        assert answer == msg("unknown_console", "id", name=unknown, consoles="Main (main), Off (off)") and llm.requests == []
+        assert answer == msg("unknown_console", "id", name=unknown, consoles="Main (main)") and llm.requests == []
     else:
         assert llm.requests
+
+
+@pytest.mark.parametrize("prompt,language", [("Berapa risk score console off?", "id"), ("risk score on console Off", "en")])
+async def test_a_console_without_a_key_is_answered_before_the_model(monkeypatch, prompt, language):
+    # live: "risk score console other" (no key) got the main console's score
+    llm, session = FakeLLM([]), FakeSession()
+    answer = await make_agent(make_config(monkeypatch), llm, session).ask(prompt, language)
+    assert answer == msg("console_no_key", language, name="Off", consoles="Main (main)")
+    assert llm.requests == [] and session.calls == []
 
 
 @pytest.mark.parametrize("prompt,name", [("Berapa risk score Zzyzx Qwertyuiop?", "Zzyzx Qwertyuiop"), ("risk score dari Rina Sari", "Rina Sari"),
@@ -2310,6 +2373,21 @@ def test_a_hedged_reason_is_dropped():
     assert "kemungkinan" not in out and "- 0 pendaftaran." in out
 
 
+def test_a_hedged_guess_about_what_comes_next_is_dropped():
+    # live: "0 training campaigns in October" ended with a guess about next month
+    from agent.agent import _without_made_up_reasons
+    answer = ("**Tidak ada kampanye pelatihan di Oktober 2026.**\n\n- Total kampanye: 0\n"
+              "- Kemungkinan kampanye pelatihan baru akan dimulai di bulan berikutnya.")
+    out = _without_made_up_reasons(answer, '{"total": 0}')
+    assert "Kemungkinan" not in out and "- Total kampanye: 0" in out
+    assert "likely" not in _without_made_up_reasons("**0.**\n\n- New campaigns will likely start next month.", "{}")
+    # a hedge the data itself has stays, and a future word alone is no guess
+    kept = "**0.**\n\n- Kampanye berikutnya akan dimulai 2026-12-01."
+    assert _without_made_up_reasons(kept, '{"next_run": "2026-12-01"}') == kept
+    quoted = "**0.**\n\n- Kemungkinan akan diperpanjang."
+    assert _without_made_up_reasons(quoted, '{"note": "kemungkinan diperpanjang"}') == quoted
+
+
 async def test_a_comparison_answer_gets_its_table_and_line(monkeypatch):
     # live: the comparison was never kept, so its answer had the model's vague line and no table
     result = {"metric": "phishing", "change_points": 23.21, "better": False,
@@ -2478,6 +2556,41 @@ async def test_people_export_is_made_in_code_when_the_model_skips_it(monkeypatch
     assert "/exports/" + "f" * 32 in answer
 
 
+def test_a_file_answer_gets_a_first_line_and_loses_placeholder_people():
+    from agent.agent import _with_attachments
+    made = [{"download_url": "/exports/" + "a" * 32 + ".csv?name=p.csv", "file_name": "p.csv", "rows": 7}]
+    # live answer: no bold line, and a "list of people" that was only statuses
+    answer = ("File CSV siap diunduh: **p.csv**\n\n**Daftar orang (7 orang):**\n1. Orang dengan status past_due\n"
+              "2. Orang dengan status not_started\n\nFile ini berisi 7 orang.")
+    out = _with_attachments(answer, made, "id")
+    assert out.startswith("**File CSV sudah dibuat: 7 baris.**")
+    assert "Orang dengan status" not in out and "Daftar orang" not in out and "File ini berisi 7 orang." in out
+    assert "/exports/" + "a" * 32 in out
+    # live: "nothing found" over a file of 7 people from that very campaign
+    found = _with_attachments("**Tidak ada campaign yang ditemukan pada tanggal 2026-09-14.**\n\nNamun, campaign \"testing\" punya 7 peserta.",
+                              made, "id")
+    assert found.startswith("**File CSV sudah dibuat: 7 baris.**") and "Tidak ada campaign" not in found and "7 peserta" in found
+    empty = [dict(made[0], rows=0)]
+    assert _with_attachments("**Tidak ada orang yang lulus.**", empty, "id").startswith("**Tidak ada orang yang lulus.**")
+    # live: a made-up link with the file id but no path, next to the real one
+    garbled = _with_attachments("**File berisi 7 orang.**\n\n**Unduh file:** https://" + "c" * 32 + ".csv?name=p.csv", made, "id")
+    assert "https://" not in garbled and garbled.count("/exports/") == 1
+    bold = _with_attachments("**File berisi 7 orang.**\n\nDetail.", made, "id")
+    assert bold.startswith("**File berisi 7 orang.**")
+
+
+@pytest.mark.parametrize("question,status", [("export to excel the people who passed the 2026-09-14 campaign", "completed"),
+                                             ("siapa saja di campaign 2026-09-14?", "all"),
+                                             ("siapa yang belum selesai campaign 2026-09-14", "unfinished")])
+async def test_the_people_table_uses_the_same_status_as_the_file(monkeypatch, question, status):
+    # live: "who passed" made a file of 0 people and a table of 7 Past Due, the tool's default
+    session = breakdown_session({})
+    llm = FakeLLM([reply(calls=[tool_call("x", "campaign_people", '{"console": "main", "status": "past_due"}')], finish="tool_calls"),
+                   reply("**ok**"), reply("**ok**"), reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(question)
+    assert next(args for name, args in session.calls if name == "campaign_people")["status"] == status
+
+
 
 @pytest.mark.parametrize("question,by", [
     ("campaign 2026-10-07 untuk grup IT berapa user complete, in progress, past due", "user"),
@@ -2540,6 +2653,27 @@ def test_attachments_are_shown_once_and_model_paths_go():
     assert msg("download_xlsx", "id", file="u.xlsx", rows=3) in out
     en = _with_attachments("**Done.**\n\nThe file has been downloaded.", [excel], "en")
     assert "The file is ready to download." in en and msg("download_xlsx", "en", file="u.xlsx", rows=3) in en
+    # live: "1 completed, 1 past_due, 1 in_progress, 3 not_started" for a file of 7 Past Due people
+    people = [{"download_url": "/exports/" + "e" * 32 + ".csv?name=p.csv", "file_name": "p.csv", "rows": 7,
+               "status_counts": {"Past Due": 7}}]
+    told = _with_attachments("**File CSV siap diunduh berisi 7 orang.**\n\n**Fakta utama**\n- 7 orang terdaftar\n"
+                             "- Status: 1 orang completed, 1 orang past_due, 3 orang not_started\n\n**Kenapa**\n"
+                             "Statusnya campuran (selesai, terlambat).", people, "id")
+    assert told.startswith("**File CSV siap diunduh berisi 7 orang.**\n\n*Status di file: 7 Past Due.*")
+    assert "1 orang completed" not in told and "campuran" not in told and "- 7 orang terdaftar" in told
+    # live: "Data mencakup orang aktif dan arsip" for a file without archived people
+    no_archive = [dict(people[0], include_archived=False)]
+    out = _with_attachments("**File berisi 7 orang.**\n\n- Data mencakup orang aktif dan arsip (archived)\n- Kolom: nama, email", no_archive, "id")
+    assert "arsip" not in out and "Kolom: nama, email" in out
+    with_archive = [dict(people[0], include_archived=True)]
+    assert "termasuk yang diarsipkan" in _with_attachments("**x**\n\nFile termasuk yang diarsipkan.", with_archive, "id")
+    # live: the model's own link line left "**Download**:  - 7 baris," behind
+    left = _with_attachments("**File berisi 7 orang.**\n\n**Download**: [p.csv](/exports/" + "d" * 32 + ".csv?name=p.csv) - 7 baris,",
+                             [excel], "id")
+    assert "**Download**" not in left and "7 baris," not in left
+    # live: "berhasil diunduh" (successfully downloaded) for a file nobody had downloaded yet
+    assert "**File CSV siap diunduh berisi 7 orang.**" in _with_attachments("**File CSV berhasil diunduh berisi 7 orang.**", [excel], "id")
+    assert "The file is ready to download." in _with_attachments("**x**\n\nThe file was successfully downloaded.", [excel], "en")
 
 
 @pytest.mark.parametrize("sentence,dropped", [
@@ -2731,6 +2865,12 @@ async def test_report_arguments_come_from_the_question(monkeypatch):
      ["| No | Nama | Email | Jabatan | Modul Past Due | Email phishing gagal |", "| 1 | Ana A | ana@example.com | Analyst | 1 | 2 |"]),
     ("group_report", {"rows": [{"name": "Ana A", "job_title": "Analyst", "risk_score": 55.0, "risk_level": "Critical"}]},
      ["| 1 | Ana A | Analyst | 55 | Critical |"]),
+    # audit 2026-11-16: an empty job title showed the row number
+    ("group_report", {"rows": [{"name": "Ana A", "job_title": None, "risk_score": 40.24, "risk_level": "Low"},
+                               {"name": "Budi B", "job_title": "", "risk_score": None, "risk_level": "Low"}]},
+     ["| 1 | Ana A | - | 40,24 | Low |", "| 2 | Budi B | - | - | Low |"]),
+    ("coverage_gaps", {"people_with_neither": [{"name": None, "email": "x@example.com", "joined": None}], "neither": 1},
+     ["| 1 | - | x@example.com | - |"]),
     ("organisation_summary", {"rows": [{"group": "Finance", "people": 2, "risk_score": 50.0, "risk_level": "High",
                                         "phish_prone_percent": 33.33, "report_percent": 20.0, "percent_complete": 66.67,
                                         "past_due": 1}], "total_rows": 1},
@@ -2784,6 +2924,28 @@ async def test_a_risk_question_is_not_answered_with_phishing_per_department(monk
     await make_agent(make_config(monkeypatch), llm, session).ask("which dept is most vulnerable")
     # live: refused, the model asked again up to four times; the risk call is made in code instead
     assert session.calls == [("risk_by_group", {"console": "main", "by": "department"})]
+
+
+async def test_current_group_risk_is_not_answered_from_the_histories(monkeypatch):
+    # live: "grup mana yang paling berisiko?" got group_risk_trend, whose histories ended in June, as "saat ini"
+    session = FakeSession({"risk_by_group": {"headline": "ok", "groups": []}, "group_risk_trend": {"groups": []}})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"})
+                         for n in ("risk_by_group", "group_risk_trend"))
+    llm = FakeLLM([reply(calls=[tool_call("a", "group_risk_trend", '{"console": "main"}')], finish="tool_calls"),
+                   reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask("grup mana yang paling berisiko?")
+    assert session.calls == [("risk_by_group", {"console": "main", "by": "group"})]
+
+
+@pytest.mark.parametrize("question", ["tren risiko per grup", "risiko grup Q2 2026"])
+async def test_group_risk_history_stays_for_a_trend_or_a_period(monkeypatch, question):
+    session = FakeSession({"risk_by_group": {"headline": "ok", "groups": []}, "group_risk_trend": {"groups": []}})
+    session.tools.extend(SimpleNamespace(name=n, description="d", input_schema={"type": "object"})
+                         for n in ("risk_by_group", "group_risk_trend"))
+    llm = FakeLLM([reply(calls=[tool_call("a", "group_risk_trend", '{"console": "main"}')], finish="tool_calls"),
+                   reply("**ok**")])
+    await make_agent(make_config(monkeypatch), llm, session).ask(question)
+    assert [name for name, _ in session.calls] == ["group_risk_trend"]
 
 
 
@@ -2873,6 +3035,161 @@ def test_phase3_tables_are_built_in_code(tool, result, expected):
     assert "| x | y |" not in out
     for part in expected:
         assert part in out
+
+
+TREND_ROWS = {"rows": [{"period": "2026-02", "tests": 2, "delivered": 38, "phish_prone_percent": 5.26, "report_percent": 10.53},
+                       {"period": "2026-03", "tests": 1, "delivered": 7, "phish_prone_percent": 0.0, "report_percent": 14.29},
+                       {"period": "2026-08", "tests": 1, "delivered": 49, "phish_prone_percent": 14.29, "report_percent": 20.41},
+                       {"period": "2026-10", "tests": 2, "delivered": 8, "phish_prone_percent": 37.5, "report_percent": 37.5}],
+              "total_rows": 4}
+
+
+def test_trend_answer_keeps_true_month_lines_and_drops_wrong_ones():
+    from agent.agent import _with_breakdown_table
+    # live answer: it called August the highest month and listed February, October and August under "zero clicks"
+    answer = ("**Key facts**\n\n- **2026-02**: 2 clicks in 2 tests, 38 delivered\n- **2026-08**: 7 clicks in 1 test, 49 delivered\n\n"
+              "**Why**\n- Clicks were concentrated in February 2026 (2 clicks) and October 2026 (3 clicks).\n"
+              "- Three months had zero clicks: March, April, and the tests in February, October, and August.\n"
+              "- The August 2026 test had the highest click rate at 14.29%.\n- In August 2026 9 people clicked.")
+    out = _with_breakdown_table(answer, "phishing_trend", TREND_ROWS, "en")
+    assert out.startswith("**Phish-prone rose from 5.26% (2026-02) to 37.5% (2026-10).**")
+    assert "*Highest phish-prone %: 2026-10 (37.5%); lowest: 2026-03 (0%).*" in out
+    assert "2 clicks in 2 tests, 38 delivered" in out and "7 clicks in 1 test" in out
+    assert "concentrated in February 2026 (2 clicks) and October 2026 (3 clicks)" in out
+    assert "zero clicks" not in out and "highest click rate" not in out and "9 people" not in out
+    assert "**Key facts**" in out
+
+
+def test_trend_check_leaves_true_zero_months_and_other_words_alone():
+    from agent.agent import _wrong_period_claim
+    rows = TREND_ROWS["rows"]
+    assert not _wrong_period_claim("Tidak ada klik pada Maret 2026.", rows)
+    assert not _wrong_period_claim("Maret: 0 klik dari 7 email.", rows)
+    assert not _wrong_period_claim("You may see 12 tests here.", rows)
+    assert not _wrong_period_claim("Q3 2026 had 49 emails.", rows)  # no quarter rows in a monthly trend
+    assert _wrong_period_claim("Agustus 2026: 25% phish-prone.", rows)
+    assert _wrong_period_claim("Tidak ada klik di bulan Oktober.", rows)
+    # live: April (2 tests) listed as a month without tests; the years of months with no data are not April's numbers
+    assert _wrong_period_claim("Ada bulan tanpa data test: Januari 2026, April 2026, Mei 2026, Juni 2026", rows + [
+        {"period": "2026-04", "tests": 2, "delivered": 12, "phish_prone_percent": 0.0, "report_percent": 8.33}])
+    assert not _wrong_period_claim("Ada bulan tanpa data test: Januari 2026, Mei 2026, Juni 2026", rows)
+    assert not _wrong_period_claim("Maret 2026 dan Mei 2026 juga ada.", rows)
+    # live: the emails were called tests
+    assert _wrong_period_claim("Feb 2026: 38 tests delivered, 5.26% phish-prone %", rows)
+    assert not _wrong_period_claim("Februari 2026: 5,26% phish-prone (2 tes, 38 email dikirim)", rows)
+
+
+def test_tool_names_bold_notes_and_advice_leave_the_answer():
+    from agent.agent import NOTE_LINE, _without_opinions, _without_tool_names
+    answer = ("**This account has no training policies.**\n\n- Zero policies exist\n- The policy_acknowledgement tool returned an "
+              "empty result set.\n\n**Why:**\nThere is nothing to acknowledge.")
+    out = _without_tool_names(answer, {"policy_acknowledgement", "make_chart", "find"})
+    assert "policy_acknowledgement" not in out and "Zero policies exist" in out and "nothing to acknowledge" in out
+    assert NOTE_LINE.sub("", "**Ended.**\n\n**[Data used: subscription_status]**").strip() == "**Ended.**"
+    advice = _without_opinions("**Berakhir.**\n\nAda 55 pengguna aktif. Beberapa pengguna mungkin tidak memiliki akses penuh atau "
+                               "perlu upgrade lisensi.", "lisensi kami habis kapan?")
+    assert "upgrade" not in advice and "55 pengguna aktif" in advice
+    match = "**Dua orang.**\n\nAda dua orang yang cocok dengan nama \"Rina Sari\":"
+    assert _without_opinions(match, "") == match
+    assert "cocok dengan" not in _without_opinions("**x**\n\nModul ini cocok dengan budaya kantor.", "")
+
+
+@pytest.mark.parametrize("answer,language,wrong", [
+    # live: an indonesian answer opened with the tool's english headline
+    ("**Training completion per job title from 2025-11-16 to today: 10 completed (7,19%) across 9 job title values.**\n\n"
+     "**Fakta utama**\n- 10 training selesai dari 139 pendaftaran", "id", True),
+    ("**Phish-prone naik dari 5,26% (2026-02) menjadi 37,5% (2026-10).**\n\nPenjelasan.", "id", False),
+    ("**Risk score organisasi sekarang 38,01 (Low); 30 hari lalu 47,18.**", "id", False),
+    ("**Template \"Konfirmasi Transaksi Mencurigakan\" yang paling banyak menipu: 28,57%.**", "id", False),
+    ("**Your KnowBe4 Diamond subscription ended on 2025-07-17, 487 days ago.**", "en", False),
+    ("**Skor risiko sekarang 38,01 dan sudah turun sejak bulan lalu.**", "en", True),
+    ("Training completion per job title from today to across completed", "id", False),  # not a bold first line
+])
+def test_a_first_line_in_the_other_language_is_caught(answer, language, wrong):
+    from agent.agent import _wrong_language_head
+    assert _wrong_language_head(answer, language) is wrong
+
+
+async def test_script_tags_never_reach_the_answer(monkeypatch):
+    text = ("**Score is low.**\n\nYou asked <script>alert(1)</script> about the risk score. <iframe src=x></iframe>"
+            "Fewer than <five people failed.")
+    llm = FakeLLM([reply(text) for _ in range(4)])
+    answer = await make_agent(make_config(monkeypatch), llm, FakeSession()).ask("<script>alert(1)</script> risk score?", "en")
+    assert "<script" not in answer.lower() and "alert(1)" not in answer and "<iframe" not in answer and "<five people" in answer
+    # the model never sees the tags in the question
+    assert "<script" not in str(llm.requests[0]["messages"][-1]["content"]).lower()
+
+
+def test_a_period_start_before_the_data_is_moved_to_the_period():
+    from datetime import date
+
+    from agent.agent import _fix_period_start
+    start = date(2025, 11, 16)
+    # live: "Dari periode September 2025 hingga Oktober 2026" for data from 2025-11-16
+    assert _fix_period_start("**Dari periode September 2025 hingga Oktober 2026, ada 2 manager.**", start, "id", "per manager?") == \
+        "**Dari periode November 2025 hingga Oktober 2026, ada 2 manager.**"
+    assert _fix_period_start("Since March 2025 the score fell.", start, "en", "x") == "Since November 2025 the score fell."
+    # inside the period, or not a period start: left alone
+    assert _fix_period_start("Dari Desember 2025 hingga kini.", start, "id", "x") == "Dari Desember 2025 hingga kini."
+    assert _fix_period_start("Lisensi berakhir 17 Juli 2025.", start, "id", "x") == "Lisensi berakhir 17 Juli 2025."
+    assert _fix_period_start("Dari September 2025.", None, "id", "x") == "Dari September 2025."
+
+
+def test_a_span_the_question_never_named_becomes_the_default():
+    from agent.agent import _fix_default_span
+    # live: "Untuk periode 3 bulan terakhir (2025-12-22 hingga 2026-10-26)" for a question with no period
+    assert _fix_default_span("**Untuk periode 3 bulan terakhir (2025-12-22 hingga 2026-10-26), ada 2 manager.**",
+                             "per manager, siapa yang telat?") == "**Untuk periode 12 bulan terakhir (2025-12-22 hingga 2026-10-26), ada 2 manager.**"
+    assert _fix_default_span("In the last three months 5 failed.", "who failed?") == "In the past 12 months 5 failed."
+    # named in the question, or by the tool itself: left alone
+    assert _fix_default_span("3 bulan terakhir: 5 gagal.", "phishing 3 bulan terakhir") == "3 bulan terakhir: 5 gagal."
+    assert _fix_default_span("Rata-rata 3 bulan terakhir 44,53.", "risk score?", '{"weekly_snapshots_last_3_months": {}}') == \
+        "Rata-rata 3 bulan terakhir 44,53."
+    assert _fix_default_span("Dalam 12 bulan terakhir.", "x") == "Dalam 12 bulan terakhir."
+
+
+@pytest.mark.parametrize("prompt,language", [("lanjut", "id"), ("2", "id"), ("yang kedua", "id"), ("next", "en"), ("more", "en")])
+async def test_a_follow_up_with_nothing_before_it_gets_a_fixed_reply(monkeypatch, prompt, language):
+    # live: a cold "lanjut" once got users 21-40 nobody had asked for
+    llm, session = FakeLLM([]), FakeSession()
+    assert await make_agent(make_config(monkeypatch), llm, session).ask(prompt, language) == msg("nothing_to_continue", language)
+    assert llm.requests == [] and session.calls == []
+
+
+async def test_a_follow_up_after_an_answer_still_goes_to_the_model(monkeypatch):
+    llm = FakeLLM([reply("**ok**"), reply("**ok**"), reply("**ok**")])
+    history = [{"role": "user", "content": "top users"}, {"role": "assistant", "content": "**Users 1-20 of 55.**"}]
+    answer = await make_agent(make_config(monkeypatch), llm, FakeSession()).ask("lanjut", "id", history)
+    assert answer != msg("nothing_to_continue", "id") and llm.requests
+
+
+async def test_a_question_that_is_only_tags_is_empty(monkeypatch):
+    llm = FakeLLM([])
+    assert await make_agent(make_config(monkeypatch), llm, FakeSession()).ask("<script>alert(1)</script>", "en") == \
+        msg("empty_question", "en")
+    assert llm.requests == []
+
+
+async def test_an_emptied_code_mark_leaves_the_answer(monkeypatch):
+    llm = FakeLLM([reply("**Score is low.**\n\nThe text `<script>x</script>` was ignored.\n\n```\ncode\n```") for _ in range(3)])
+    answer = await make_agent(make_config(monkeypatch), llm, FakeSession()).ask("risk score?", "en")
+    assert "``" not in answer.replace("```", "") and "```\ncode\n```" in answer
+
+
+def test_a_plain_section_heading_left_empty_goes():
+    from agent.agent import _with_breakdown_table
+    # live: every bullet under "Fakta utama" was a superlative, and the bare heading stayed
+    answer = ("**Tren naik.**\n\nFakta utama\n- Phish-prone tertinggi: 37,5% (Oktober 2026)\n- Bulan terendah: Maret 2026 (0%)\n\n"
+              "Kenapa\nAda 6 bulan dengan tes.")
+    out = _with_breakdown_table(answer, "phishing_trend", TREND_ROWS, "id")
+    assert "Fakta utama" not in out and "Kenapa\nAda 6 bulan dengan tes." in out
+
+
+def test_trend_answer_keeps_the_models_own_first_line():
+    from agent.agent import _with_breakdown_table
+    out = _with_breakdown_table("**Tren naik dari 5,26% menjadi 37,5%.**\n\nPenjelasan.", "phishing_trend", TREND_ROWS, "id")
+    assert out.startswith("**Tren naik dari 5,26% menjadi 37,5%.**")
+    assert "*Phish-prone % tertinggi: 2026-10 (37,5%); terendah: 2026-03 (0%).*" in out
 
 
 

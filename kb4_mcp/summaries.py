@@ -173,6 +173,16 @@ def _history_stats(history: list[dict[str, Any]], today: date | None = None, cur
     }
 
 
+def _months_ago(day: str | None, today: date | None = None) -> int | None:
+    """whole calendar months between a yyyy-mm-dd day and today (2026-05-11 -> 2026-11-16 is 6)"""
+    try:
+        d = date.fromisoformat(str(day)[:10])
+    except ValueError:
+        return None
+    today = today or date.today()
+    return max(0, (today.year - d.year) * 12 + today.month - d.month - (today.day < d.day))
+
+
 def _period_stats(history: list[dict[str, Any]], start: str | None, end: str | None, current: Any) -> dict[str, Any] | None:
     """the weekly snapshots inside the asked period, and the change from the first one to now"""
     if not (start or end):
@@ -191,7 +201,8 @@ def _period_stats(history: list[dict[str, Any]], start: str | None, end: str | N
     return {
         "period": label,
         "snapshots": len(points),
-        "first_snapshot": {"date": points[0][0], "score": _r(points[0][1])},
+        # whole months counted here: the model called a snapshot from six months ago "five months ago"
+        "first_snapshot": {"date": points[0][0], "score": _r(points[0][1]), "months_ago": _months_ago(points[0][0])},
         "last": {"date": "now" if live else points[-1][0], "score": _r(now)},
         "change": _r(now - points[0][1]),
         "average": _r(sum(scores) / len(scores)),

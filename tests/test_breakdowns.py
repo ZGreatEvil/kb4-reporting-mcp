@@ -161,6 +161,9 @@ async def test_people_csv_has_every_person_with_groups(tmp_path, monkeypatch):
     assert "Past Due (archived)" in path.read_text(encoding="utf-8-sig") and archived["rows"] == 4
     only_late = await outputs.export_csv(FakeKB(), "main", "campaign_people", campaign="7", status="past_due")
     assert only_late["rows"] == 1 and only_late["status_filter"] == "past_due"
+    # counts per status come with the file, so the answer does not have to guess them
+    assert sum(r["status_counts"].values()) == 3 and r["status_counts"]["Passed"] >= 1
+    assert only_late["status_counts"] == {"Past Due": 1}
 
 
 @pytest.mark.parametrize("args,key", [({"campaign": "no such campaign"}, "error"), ({"campaign": "7", "status": "lost"}, "error")])

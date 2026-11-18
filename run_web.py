@@ -14,4 +14,5 @@ if __name__ == "__main__":
         from web.main import app
     except (SettingsError, FileNotFoundError) as exc:
         sys.exit(str(exc))
-    uvicorn.run(app, host=cfg.web_host, port=cfg.web_port)
+    # no "server: uvicorn" header telling a scanner what runs here
+    uvicorn.run(app, host=cfg.web_host, port=cfg.web_port, server_header=False)

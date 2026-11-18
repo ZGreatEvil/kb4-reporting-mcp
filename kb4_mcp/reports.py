@@ -156,6 +156,18 @@ def _training_tally(units: list[list[str]]) -> dict[str, Any]:
             "percent_complete": _pct(counts["completed"], total), "percent_past_due": _pct(counts["past_due"], total)}
 
 
+def _training_totals(pairs: dict[tuple[Any, Any], list[str]]) -> dict[str, Any]:
+    """the tally plus how many different people: "2 people (once per campaign)" for one person in two campaigns was read
+    by the model as two members"""
+    return {**_training_tally(list(pairs.values())), "different_people": len({uid for uid, _ in pairs})}
+
+
+def _enrolled_text(t: dict[str, Any]) -> str:
+    n, people = t["total"], t["different_people"]
+    return (f"{n} enrolment{'' if n == 1 else 's'} ({people} different {'person' if people == 1 else 'people'}; "
+            f"a person counts once per campaign)")
+
+
 def _sorted_rows(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
     """highest first, "(kosong)" last"""
     return sorted(rows, key=lambda r: (r["value"] == EMPTY, -(r.get(key) if isinstance(r.get(key), (int, float)) else -1),
@@ -232,12 +244,12 @@ async def training_by_attribute(kb: Any, console: str, attribute: str = "departm
         buckets.setdefault(_value(people[uid], attribute), []).append(statuses)
     rows = _sorted_rows([{"value": v, **_training_tally(b), "small_sample": len(b) < SMALL_SAMPLE} for v, b in buckets.items()],
                         "percent_past_due")
-    totals = _training_tally(list(pairs.values()))
+    totals = _training_totals(pairs)
     shown = rows[: _limit(limit, ROW_LIMIT)]
     return {
         "console": console,
         "attribute": attribute,
-        "headline": (f"{scope['label']} per {attribute}: {totals['total']} people (once per campaign) in {len(rows)} {attribute} "
+        "headline": (f"{scope['label']} per {attribute}: {_enrolled_text(totals)} in {len(rows)} {attribute} "
                      f"values; {totals['completed']} completed ({totals['percent_complete']}%), {totals['in_progress']} in "
                      f"progress, {totals['not_started']} not started, {totals['past_due']} Past Due ({totals['percent_past_due']}%)."
                      if totals["total"] else f"No training enrolments for {scope['label']}."),
@@ -363,7 +375,7 @@ async def group_report(kb: Any, console: str, group: str, start_date: str | None
                     key=lambda r: (-r["failed_phishing_emails"], r["name"].casefold()))
     enrolments = [e for e in await kb.list_training_enrollments(console, include_campaign_id=True)
                   if (e.get("user") or {}).get("id") in ids and _within(e.get("enrollment_date"), start_date, end_date)]
-    training = _training_tally(list(_training_pairs(enrolments, people, include_archived).values()))
+    training = _training_totals(_training_pairs(enrolments, people, include_archived))
     riskiest = sorted((u for u in members if isinstance(u.get("current_risk_score"), (int, float))),
                       key=lambda u: -u["current_risk_score"])[:5]
     period = _period_label(start_date, end_date)
@@ -375,8 +387,8 @@ async def group_report(kb: Any, console: str, group: str, start_date: str | None
                      f"({risk_level(g.get('current_risk_score'))}). Phishing ({_tests_label(tests, left_out)}): "
                      f"{phishing['delivered']} emails delivered, phish-prone {phishing['phish_prone_percent']}%, "
                      f"{phishing['failed']} failed ({phishing['failed_percent']}%), {phishing['reported']} reported "
-                     f"({phishing['report_percent']}%). Training{' enrolled ' + period if period else ''}: {training['total']} people "
-                     f"(once per campaign), {training['completed']} completed ({training['percent_complete']}%), "
+                     f"({phishing['report_percent']}%). Training{' enrolled ' + period if period else ''}: {_enrolled_text(training)}, "
+                     f"{training['completed']} completed ({training['percent_complete']}%), "
                      f"{training['past_due']} Past Due."),
         "risk_trend": {"headline": _trend_headline(f"Group {g.get('name')}", trend), **({"period": period_risk} if period_risk else {})},
         "phishing": phishing,
@@ -406,7 +418,7 @@ async def organisation_summary(kb: Any, console: str, start_date: str | None = N
     enrolments = [e for e in await kb.list_training_enrollments(console, include_campaign_id=True)
                   if _within(e.get("enrollment_date"), start_date, end_date)]
     training_pairs = _training_pairs(enrolments, people, False)
-    phishing, training = _phish_tally(pairs), _training_tally(list(training_pairs.values()))
+    phishing, training = _phish_tally(pairs), _training_totals(training_pairs)
     groups = [g for g in await kb.list_groups(console, "active") if g.get("member_count")]
     member_of = {uid: set(u.get("groups") or []) for uid, u in people.items() if _active(u, False)}
     rows = []
@@ -428,7 +440,7 @@ async def organisation_summary(kb: Any, console: str, start_date: str | None = N
         "headline": (f"Organisation risk score {current.get('score')} ({current.get('level')}). Phishing "
                      f"({_tests_label(tests, left_out)}): {phishing['delivered']} emails delivered, phish-prone "
                      f"{phishing['phish_prone_percent']}%, {phishing['reported']} reported ({phishing['report_percent']}%). "
-                     f"Training{' enrolled ' + period if period else ''}: {training['total']} people (once per campaign), "
+                     f"Training{' enrolled ' + period if period else ''}: {_enrolled_text(training)}, "
                      f"{training['percent_complete']}% completed, {training['past_due']} Past Due. {len(rows)} groups with members."),
         "risk": {"headline": overview.get("headline"), "current": current},
         "phishing": phishing,
@@ -729,8 +741,9 @@ async def subscription_status(kb: Any, console: str) -> dict[str, Any]:
         "subscription_level": account.get("subscription_level"),
         "subscription_end_date": end or None,
         # an ended subscription: how long ago, not a negative "days left" (the model repeated "-487 days")
-        "days_left": days if days is not None and days >= 0 else None,
-        "days_since_end": -days if days is not None and days < 0 else None,
+        # only the one that applies: the model wrote "Days left: None" from a null
+        **({"days_left": days} if days is not None and days >= 0 else {}),
+        **({"days_since_end": -days} if days is not None and days < 0 else {}),
         "seats_licensed": seats,
         "active_users": len(users),
         "users_over_seats": over,
@@ -784,7 +797,7 @@ async def executive_report(kb: Any, console: str, month: str | None = None, star
         "repeat_clickers": repeat[:10],
         "repeat_clickers_total": len(repeat),
         "subscription": {k: sub.get(k) for k in ("subscription_level", "subscription_end_date", "days_left", "days_since_end",
-                                                  "seats_licensed", "active_users")},
+                                                  "seats_licensed", "active_users") if k in sub},
         "structure": ["risk", "phishing", "training", "the five riskiest groups (table)", "repeat clickers", "subscription"],
         "note": ("Write a short management report in this order: risk, phishing, training, the riskiest groups (the table is "
                  "added automatically), repeat clickers, subscription. " + NO_ADVICE),

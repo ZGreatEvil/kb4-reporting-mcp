@@ -71,7 +71,7 @@ def today(monkeypatch):
 
 async def test_subscription_status_says_an_ended_subscription_and_seats_over(today):
     r = await reports.subscription_status(FakeKB(), "main")
-    assert r["days_left"] is None and r["days_since_end"] == 487 and "ended on 2025-07-17 (487 days ago)" in r["headline"]
+    assert "days_left" not in r and r["days_since_end"] == 487 and "ended on 2025-07-17 (487 days ago)" in r["headline"]
     assert r["seats_licensed"] == 2 and r["active_users"] == 3 and r["users_over_seats"] == 1
     # admins by name only, never their emails
     # live: an admin with no name in KnowBe4 was shown by email address
@@ -84,7 +84,7 @@ async def test_subscription_with_no_end_date():
             return {"subscription_level": "Gold", "number_of_seats": 10}
 
     r = await reports.subscription_status(NoEnd(), "main")
-    assert r["days_left"] is None and "no end date recorded" in r["headline"] and r["users_over_seats"] == 0
+    assert "days_left" not in r and "days_since_end" not in r and "no end date recorded" in r["headline"] and r["users_over_seats"] == 0
 
 
 async def test_executive_report_defaults_to_the_last_full_month(today):

@@ -1,6 +1,17 @@
-# KnowBe4 Reporting MCP — Multi-Console Reporting (No Docker)
+# KnowBe4 Reporting MCP — Multi-Console Reporting
 
 A local, read-only MCP server and web chat application for KnowBe4 Reporting API, using a free open-weight model running locally (Ollama by default), so KnowBe4 data never leaves the machine.
+
+## Documentation
+
+| Document | For |
+|---|---|
+| This README | installing and running on a Windows PC, without Docker |
+| [docs/INSTALL_SERVER.md](docs/INSTALL_SERVER.md) | installing on a Linux server with Docker and an NVIDIA GPU |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) · [docs/USER_GUIDE.id.md](docs/USER_GUIDE.id.md) | staff who use the chat (English · Bahasa Indonesia) |
+| [docs/TECHNICAL.md](docs/TECHNICAL.md) | developers and IT: architecture, tools, safeguards, security model |
+| [docs/DEMO.md](docs/DEMO.md) | a demo script |
+| [CHANGELOG.md](CHANGELOG.md) | what changed in each version |
 
 ## What is included
 
@@ -23,7 +34,7 @@ A local, read-only MCP server and web chat application for KnowBe4 Reporting API
 - Casual Indonesian and English, chat spellings, uncommon words and typos ("brp yg nunggak trainnig") understood
 - A fixed answer to "apa saja yang bisa kamu lakukan?" / "what can you do?" listing only what the bot really does
 - Health-check script
-- No Docker required
+- Runs without Docker on Windows; a Docker set-up (web chat + MCP server, and Ollama on the GPU) for Linux servers
 
 ## Requirements
 
@@ -169,8 +180,19 @@ The `LLM_*` defaults already point at Ollama on this machine:
 | `KB4_CACHE_SECONDS` | `600` | KnowBe4 answers are reused for this long, so repeat and follow-up questions cost no requests. `0` always fetches fresh. A question that asks for fresh data ("ambil data terbaru", "refresh", "jangan pakai cache", "fetch fresh data") skips the copy for that answer, at most once a minute per console |
 | `KB4_USAGE_FILE` | `.kb4_usage.json` | Where the rolling 24-hour request count is kept (git-ignored). Change it only to keep the count somewhere else, for example on a shared drive when two copies run against the same console |
 | `KB4_DAILY_LIMIT` | empty | Requests per console per rolling 24 hours. Empty uses KnowBe4's limit: 2,000 plus the account's licensed seats |
-| `WEB_ALLOWED_HOSTS` | empty | Extra host names the web chat answers to, comma-separated (for a LAN or Docker demo). `127.0.0.1` and `localhost` always work; any other name gets "Invalid host header" |
+| `WEB_ALLOWED_HOSTS` | empty | Extra host names the web chat answers to, comma-separated (for a LAN, a server or a reverse proxy). `127.0.0.1` and `localhost` always work; any other name gets "Invalid host header" |
+| `WEB_PUBLISH_ADDRESS` | `127.0.0.1` | Docker only (`docker-compose.yml`): the server address the web chat is published on. `127.0.0.1` keeps it to the server itself (behind a reverse proxy); `0.0.0.0` opens it on every network. See [docs/INSTALL_SERVER.md](docs/INSTALL_SERVER.md) |
 | `KB4_CONSOLES_FILE` | empty | Path to a consoles file other than `config/consoles.yaml` |
+| `LLM_API_KEY` | `ollama` | Key for the model server; Ollama ignores it, hosted OpenAI-compatible servers need their own |
+| `WEB_HOST`, `WEB_PORT` | `127.0.0.1`, `8080` | Where the web chat listens. `0.0.0.0` shares it on the network (see section 8) |
+| `MCP_HOST`, `MCP_PORT`, `MCP_PATH` | `127.0.0.1`, `8000`, `/mcp` | Where the MCP server listens; keep it on `127.0.0.1` |
+| `KB4_TIMEOUT_SECONDS` | `30` | Per KnowBe4 request |
+| `KB4_MAX_RETRIES` | `4` | Retries after the first try on network errors, 429 and 502–504 |
+| `KB4_PER_PAGE` | `500` | Records per KnowBe4 page (KnowBe4's maximum is 500) |
+| `KB4_MAX_RECORDS_PER_TOOL` | `5000` | Most records one list call fetches |
+| `ENABLE_RAW_GET` | `true` | `false` switches off `knowbe4_raw_get` for every MCP client, not only the chat |
+
+Yes/no settings take `true`/`false` (also `yes`/`no`, `1`/`0`, `on`/`off`); any other word stops the server with a message.
 
 Every setting is checked at start-up. A mistake stops the server with a short list naming the setting and the problem, for example `WEB_PORT='eighty' in .env must be a whole number.` or `KB4_RATE_LIMIT_RPS in .env: Input should be less than or equal to 4`.
 
@@ -264,7 +286,7 @@ Make sure Ollama is running (`ollama ps` answers), then in a second terminal:
 .\.venv\Scripts\python.exe run_web.py
 ```
 
-Check `http://127.0.0.1:8080/health`: it should show `"status": "ok"` with `"reachable": true` and `"model_pulled": true` under `llm`, and `"reachable": true` under `mcp`. `"degraded"` means Ollama is not running, the model has not been created (README step 3), the MCP server is down, or the loaded model has less context than the app needs; `warnings` says which. `product_apis` lists which optional product API keys each console has (names only). The MCP tool `list_consoles` also shows each product's requests in the last 24 hours. The status badge in the page header shows the same thing.
+Check `http://127.0.0.1:8080/health`: it should show `"status": "ok"` with `"reachable": true` and `"model_pulled": true` under `llm`, and `"reachable": true` under `mcp`. `"degraded"` means Ollama is not running, the model has not been created (README step 3), the MCP server is down, or the loaded model has less context than the app needs; `warnings` says which. `consoles` lists the consoles that have a Reporting API key (the page header shows these) and `consoles_without_key` the ones still waiting for one. `product_apis` lists which optional product API keys each console has (names only). The MCP tool `list_consoles` also shows each product's requests in the last 24 hours. The status badge in the page header shows the same thing.
 
 On the first visit the page asks for a language, **Bahasa Indonesia** or **English**. The choice is remembered in that browser and can be changed any time with the **ID | EN** switch in the header. It sets the page text and the language the model answers in. Other clients can pass it to the API directly: `POST /api/chat` with `{"message": "...", "language": "id"}` or `"en"` (default `id`; anything else is rejected with HTTP 422).
 

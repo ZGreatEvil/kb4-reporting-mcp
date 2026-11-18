@@ -169,6 +169,9 @@ async def test_group_report_in_full():
     assert r["phishing"]["delivered"] == 3 and r["phishing"]["failed"] == 2
     assert r["repeat_clickers"] == [{"name": "Ana A", "failed_phishing_emails": 2}]
     assert r["training"]["total"] == 3 and r["training"]["past_due"] == 1
+    # audit 2026-11-16: "3 people (once per campaign)" read as three members; it is 3 enrolments of 2 people
+    assert r["training"]["different_people"] == 2
+    assert "3 enrolments (2 different people; a person counts once per campaign)" in r["headline"]
     assert [m["name"] for m in r["rows"]] == ["Ana A", "Budi B"] and "Group Finance" in r["risk_trend"]["headline"]
 
 

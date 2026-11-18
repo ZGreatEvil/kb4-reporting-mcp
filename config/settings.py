@@ -125,8 +125,17 @@ def _optional_float(name: str) -> float | None:
     return _number(name, "", float) if os.getenv(name, "").strip() else None
 
 
+TRUE_WORDS = {"true", "yes", "1", "on"}
+FALSE_WORDS = {"false", "no", "0", "off"}
+
+
 def _flag(name: str, default: str) -> bool:
-    return os.getenv(name, default).strip().lower() == "true"
+    raw = os.getenv(name, "").strip().lower() or default
+    if raw in TRUE_WORDS:
+        return True
+    if raw in FALSE_WORDS:
+        return False
+    raise SettingsError(f"{name}={raw!r} in .env must be true or false.")
 
 
 # .env names of fields whose name is not simply the upper-cased field name

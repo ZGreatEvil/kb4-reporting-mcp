@@ -237,11 +237,8 @@ async def _loaded_context() -> int | None:
     return None
 
 
-@app.get("/health")
-async def health():
-
+async def _llm_health() -> tuple[dict, list[str]]:
     warnings = []
-
     try:
         models = await AGENT.llm.list_models()
         llm = {
@@ -261,15 +258,24 @@ async def health():
     llm["loaded_context"] = context
     if context is not None and context < MIN_CONTEXT:
         warnings.append(f"model loaded with a {context}-token context; it needs at least {MIN_CONTEXT} (README step 3)")
+    return llm, warnings
 
+
+async def _mcp_health() -> tuple[dict, list[str]]:
+    try:
+        return {"reachable": True, "tool_count": len(await _mcp_tools())}, []
+    except Exception as exc:  # any failure here means "not reachable"
+        return {"reachable": False, "error_type": type(exc).__name__}, ["MCP server not reachable"]
+
+
+@app.get("/health")
+async def health():
+
+    # the model and mcp checks are independent; run together, the page's "checking" chip clears sooner
+    (llm, llm_warnings), (mcp, mcp_warnings) = await asyncio.gather(_llm_health(), _mcp_health())
+    warnings = llm_warnings + mcp_warnings
     if not any(c.has_api_key for c in CONFIG.consoles.values()):
         warnings.append("no console in config/consoles.yaml has an API key in .env")
-
-    try:
-        mcp = {"reachable": True, "tool_count": len(await _mcp_tools())}
-    except Exception as exc:  # any failure here means "not reachable"
-        mcp = {"reachable": False, "error_type": type(exc).__name__}
-        warnings.append("MCP server not reachable")
 
     return {
         "status": "ok" if not warnings else "degraded",
@@ -281,9 +287,9 @@ async def health():
         "llm": llm,
         "mcp": mcp,
         "warnings": warnings,
-        "consoles": list(
-            CONFIG.consoles.keys()
-        ),
+        # the page shows these in its header, so only consoles that can answer
+        "consoles": [key for key, console in CONFIG.consoles.items() if console.has_api_key],
+        "consoles_without_key": [key for key, console in CONFIG.consoles.items() if not console.has_api_key],
         # which optional product api keys each console has (names only, no request)
         "product_apis": {
             key: [p for p in PRODUCTS if console.product_key(p)]

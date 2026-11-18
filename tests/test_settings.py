@@ -10,6 +10,16 @@ def test_env_example_exists():
     assert Path(".env.example").exists()
 
 
+def test_every_setting_in_env_example_is_in_the_readme():
+    # eleven were missing once; per-console key names (KB4_MAIN_API_KEY, ...) are examples, not settings
+    import re
+    keys = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]+)=", Path(".env.example").read_text(encoding="utf-8"), re.M))
+    readme = Path("README.md").read_text(encoding="utf-8")
+    missing = sorted(k for k in keys if not re.fullmatch(r"KB4_[A-Z0-9]+_(?:API|KSAT|PHISHER|PIQ|COACH|EVENTS)_KEY", k)
+                     and f"`{k}`" not in readme)
+    assert missing == []
+
+
 def test_console_example_exists():
     assert Path("config/consoles.example.yaml").exists()
 
@@ -90,6 +100,9 @@ def test_prompt_with_no_keys(monkeypatch):
     ("LLM_TOP_P", "1.5", "LLM_TOP_P in .env"),
     ("MCP_PATH", "mcp", "MCP_PATH in .env"),
     ("KB4_DAILY_LIMIT", "0", "KB4_DAILY_LIMIT in .env"),
+    # found in the 2026-11-16 audit: any other word silently meant false
+    ("ENABLE_RAW_GET", "maybe", "ENABLE_RAW_GET='maybe' in .env must be true or false"),
+    ("LLM_EXPOSE_RAW_GET", "ture", "LLM_EXPOSE_RAW_GET='ture' in .env must be true or false"),
 ])
 def test_bad_env_values_name_the_setting(monkeypatch, name, value, expected):
     from config.settings import SettingsError
@@ -120,5 +133,11 @@ def test_bad_consoles_file_is_explained(tmp_path, text, expected):
     with pytest.raises(SettingsError) as info:
         load_config(f)
     assert expected in str(info.value)
+
+
+@pytest.mark.parametrize("value,expected", [("TRUE", True), (" yes ", True), ("1", True), ("off", False), ("", True)])
+def test_flags_take_common_spellings(monkeypatch, value, expected):
+    monkeypatch.setenv("ENABLE_RAW_GET", value)
+    assert load_config("config/consoles.example.yaml").enable_raw_get is expected
 
 

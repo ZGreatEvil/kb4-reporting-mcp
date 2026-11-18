@@ -230,7 +230,33 @@ def test_chart_images_are_served_fresh_and_expire(client, tmp_path, monkeypatch)
 
 
 
-def test_health_lists_product_keys_by_name_only(client, monkeypatch):
+@pytest.fixture
+def offline_health(monkeypatch):
+    # /health asks ollama and the mcp server; a unit test must reach neither (an open socket to a running ollama
+    # failed the suite under -W error)
+    async def models():
+        return [f"{main.CONFIG.llm_model}:latest"]
+
+    async def tools():
+        return ["a"]
+
+    async def context():
+        return 32768
+
+    monkeypatch.setattr(main.AGENT.llm, "list_models", models)
+    monkeypatch.setattr(main, "_mcp_tools", tools)
+    monkeypatch.setattr(main, "_loaded_context", context)
+
+
+def test_health_lists_only_consoles_with_a_key(client, monkeypatch, offline_health):
+    # audit 2026-11-16: the page header showed a console without a key as if it could answer
+    monkeypatch.setenv("KB4_MAIN_API_KEY", "real-token")
+    monkeypatch.delenv("KB4_SUBSIDIARY_API_KEY", raising=False)
+    body = client.get("/health").json()
+    assert body["consoles"] == ["main"] and body["consoles_without_key"] == ["subsidiary"]
+
+
+def test_health_lists_product_keys_by_name_only(client, monkeypatch, offline_health):
     for console in main.CONFIG.consoles.values():
         monkeypatch.setattr(console, "ksat_key_env", "KB4_TEST_KSAT")
     monkeypatch.setenv("KB4_TEST_KSAT", "secret-value")

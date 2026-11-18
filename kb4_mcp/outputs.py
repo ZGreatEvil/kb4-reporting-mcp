@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import time
 import uuid
+from collections import Counter
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -449,7 +450,10 @@ async def export_csv(
         "dataset": dataset,
         "file_type": file_type,
         **({"status_filter": status or "all"} if dataset == "users" else {}),
-        **({"status_filter": found["status"], "campaign": names, "different_people": found["different_people"]}
+        # the counts per status: without them the model made up "1 completed, 1 past_due, ..." for 7 Past Due people
+        **({"status_filter": found["status"], "campaign": names, "different_people": found["different_people"],
+            "status_counts": dict(sorted(Counter(str(r["status"]) for r in found["rows"]).items())),
+            "include_archived": include_archived}
            if dataset == "campaign_people" else {}),
         # a campaign file holds that campaign's people, whatever the default period was
         "period": ("today's users (no period)" if dataset == "users" else

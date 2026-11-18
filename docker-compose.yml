@@ -1,0 +1,88 @@
+# knowbe4 chatbot: web chat + mcp server (app), the local model (ollama) and a one-time model setup (ollama-init).
+# needs .env and config/consoles.yaml next to this file; see docs/INSTALL_SERVER.md.
+# only the web chat is published. ollama and the mcp server are not reachable from outside.
+name: kb4-chatbot
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  ollama:
+    image: ollama/ollama:0.40.16
+    restart: unless-stopped
+    environment:
+      OLLAMA_FLASH_ATTENTION: "1"
+      OLLAMA_KV_CACHE_TYPE: q8_0
+      OLLAMA_KEEP_ALIVE: 24h
+    volumes:
+      - ollama:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    logging: *logging
+
+  # creates kb4-analyst from ollama/Modelfile the first time; later starts skip it (no internet needed then)
+  ollama-init:
+    image: ollama/ollama:0.40.16
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    volumes:
+      - ./ollama/Modelfile:/Modelfile:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama show kb4-analyst >/dev/null 2>&1 || { ollama pull qwen3.5:4b && ollama create kb4-analyst -f /Modelfile; }"]
+    restart: "no"
+    logging: *logging
+
+  app:
+    build: .
+    image: kb4-chatbot:latest
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    env_file: .env
+    # these win over .env: they only make sense inside the container
+    environment:
+      LLM_BASE_URL: http://ollama:11434/v1
+      MCP_HOST: 127.0.0.1
+      WEB_HOST: 0.0.0.0
+      KB4_CONSOLES_FILE: /run/kb4/consoles.yaml
+      KB4_USAGE_FILE: /data/kb4_usage.json
+    volumes:
+      - ./config/consoles.yaml:/run/kb4/consoles.yaml:ro
+      - kb4data:/data
+    ports:
+      # 127.0.0.1 = this server only (put a reverse proxy in front); set WEB_PUBLISH_ADDRESS=0.0.0.0 in .env to open it
+      - "${WEB_PUBLISH_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:${WEB_PORT:-8080}"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/web/static/charts:uid=10001,gid=10001,mode=0700
+      - /app/exports:uid=10001,gid=10001,mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging: *logging
+
+volumes:
+  ollama:
+  kb4data:

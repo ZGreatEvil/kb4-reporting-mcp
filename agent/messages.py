@@ -135,6 +135,17 @@ MESSAGES: dict[str, dict[str, str]] = {
         "id": "**Tidak ada console bernama \"{name}\".** Console yang tersedia: {consoles}.",
         "en": "**There is no console called \"{name}\".** Available consoles: {consoles}.",
     },
+    "nothing_to_continue": {
+        "id": "Belum ada jawaban sebelumnya untuk dilanjutkan. Tanyakan sesuatu tentang data KnowBe4 Anda, misalnya \"berapa risk score sekarang?\"",
+        "en": "There is no earlier answer to continue yet. Ask something about your KnowBe4 data, for example \"what is our risk score now?\"",
+    },
+    "file_status_line": {"id": "Status di file: {counts}.", "en": "Status in the file: {counts}."},
+    "file_line_csv": {"id": "File CSV sudah dibuat: {rows} baris.", "en": "The CSV file is ready: {rows} rows."},
+    "file_line_xlsx": {"id": "File Excel sudah dibuat: {rows} baris.", "en": "The Excel file is ready: {rows} rows."},
+    "console_no_key": {
+        "id": "**Console \"{name}\" belum punya API key, jadi datanya tidak bisa dibaca.** Admin bisa menambahkan key-nya di file .env. Console yang bisa dipakai: {consoles}.",
+        "en": "**The \"{name}\" console has no API key yet, so its data can't be read.** An admin can add its key in the .env file. Consoles you can use: {consoles}.",
+    },
     "call_find_user": {
         "id": "Pertanyaan ini tentang orang bernama {name}. Panggil find_user dengan query \"{name}\" sekarang, lalu jawab hanya dari hasilnya (tidak ditemukan, atau tanyakan yang mana).",
         "en": "This question is about a person called {name}. Call find_user with query \"{name}\" now, then answer only from its result (not found, or ask which one).",
@@ -233,6 +244,17 @@ MESSAGES: dict[str, dict[str, str]] = {
         "id": "% gagal tertinggi: {top} ({top_pct}%); % melapor tertinggi: {rep} ({rep_pct}%). Email terbanyak: {big} ({big_n}).",
         "en": "Highest % failed: {top} ({top_pct}%); highest % reported: {rep} ({rep_pct}%). Most emails: {big} ({big_n}).",
     },
+    "trend_standouts": {
+        "id": "Phish-prone % tertinggi: {top} ({top_pct}%); terendah: {low} ({low_pct}%).",
+        "en": "Highest phish-prone %: {top} ({top_pct}%); lowest: {low} ({low_pct}%).",
+    },
+    "trend_line": {
+        "id": "Phish-prone {how} dari {a} ({pa}) menjadi {b} ({pb}).",
+        "en": "Phish-prone {how} from {a} ({pa}) to {b} ({pb}).",
+    },
+    "trend_up": {"id": "naik", "en": "rose"},
+    "trend_down": {"id": "turun", "en": "fell"},
+    "trend_flat": {"id": "tetap", "en": "stayed the same"},
     "group_training_line": {
         "id": "{name} (mulai {date}, {status}): {total} {unit} di {groups} grup; {completed} selesai ({percent}%), {in_progress} sedang berjalan, {not_started} belum mulai, {past_due} Past Due ({percent_past_due}%).",
         "en": "{name} (started {date}, {status}): {total} {unit} in {groups} groups; {completed} completed ({percent}%), {in_progress} in progress, {not_started} not started, {past_due} Past Due ({percent_past_due}%).",
@@ -287,6 +309,10 @@ MESSAGES: dict[str, dict[str, str]] = {
     "call_topic": {
         "id": "Pertanyaan ini dijawab oleh {tool}. Panggil {tool} sekarang, lalu jawab hanya dari hasilnya.",
         "en": "This question is answered by {tool}. Call {tool} now, then answer only from its result.",
+    },
+    "call_period": {
+        "id": "Pertanyaan ini menyebut periode lain. Panggil {tool} sekarang untuk periode itu, lalu jawab hanya dari hasilnya.",
+        "en": "This question names another period. Call {tool} now for that period, then answer only from its result.",
     },
     "call_again": {
         "id": "Alasannya harus dari data. Panggil {tool} sekarang, lalu jelaskan hanya dari hasilnya; jangan menebak penyebab yang tidak ada di data.",

@@ -60,6 +60,10 @@
   }
 }
 
+/* the language switch's outline sits above its buttons: the chosen one's background hid it on that side.
+   plain css (the same rule ends app.css), so it works before and after a rebuild */
+.segmented{position:relative}.segmented:after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:inset 0 0 0 1px #e2e8f0;pointer-events:none}@media (prefers-color-scheme:dark){.segmented:after{box-shadow:inset 0 0 0 1px #334155}}
+
 /* thin scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
